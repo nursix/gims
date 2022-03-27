@@ -97,7 +97,7 @@ class AuthS3(Auth):
             - s3_create_role
             - s3_delete_role
             - s3_assign_role
-            - s3_withdraw_role
+            - s3_remove_role
             - s3_has_role
             - s3_group_members
 
@@ -370,6 +370,9 @@ Thank you"""
                       ),
                 # Realm
                 Field("pe_id", "integer"),
+                Field("system", "boolean",
+                      default = False,
+                      ),
                 migrate = migrate,
                 fake_migrate = fake_migrate,
                 *S3MetaFields.sync_meta_fields())
@@ -3788,7 +3791,7 @@ Please go to %(url)s to approve this user."""
 
         roles = self.s3_get_roles(record_id)
         if roles:
-            self.s3_withdraw_role(record_id, roles)
+            self.s3_remove_role(record_id, roles)
         return record_id
 
     # -------------------------------------------------------------------------
@@ -4215,7 +4218,7 @@ Please go to %(url)s to approve this user."""
                                )
 
     # -------------------------------------------------------------------------
-    def s3_assign_role(self, user_id, group_id, for_pe=None):
+    def s3_assign_role(self, user_id, group_id, for_pe=None, system=False):
         """
             Assigns a role to a user (add the user to a user group)
 
@@ -4228,6 +4231,7 @@ Please go to %(url)s to approve this user."""
                              affiliated with)
                            - 0: site-wide realm (no entity-restriction)
                            - X: restrict to records owned by entity X
+                system: set the system-flag for any new role assignments
 
             Notes:
                 - strings are assumed to be group UIDs
@@ -4281,10 +4285,10 @@ Please go to %(url)s to approve this user."""
             if gid not in assigned_groups:
                 membership = {"user_id": user_id,
                               "group_id": gid,
+                              "system": system,
                               }
                 if for_pe is not None and str(gid) not in unrestrictable:
                     membership["pe_id"] = for_pe
-                #membership_id = mtable.insert(**membership)
                 mtable.insert(**membership)
 
         # Update roles for current user if required
@@ -4292,7 +4296,7 @@ Please go to %(url)s to approve this user."""
             self.s3_set_roles()
 
     # -------------------------------------------------------------------------
-    def s3_withdraw_role(self, user_id, group_id, for_pe=None):
+    def s3_remove_role(self, user_id, group_id, for_pe=None):
         """
             Removes a role assignment from a user account
 

@@ -11,7 +11,13 @@ from gluon.storage import Storage
 
 from templates.RLPPTM.rlpgeonames import rlp_GeoNames
 
+# Default/lead organisation
 MFFKI = "Ministerium für Familie, Frauen, Kultur und Integration"
+
+# Org Groups
+DISTRICTS = "Kreisverwaltung"
+COMMUNES = "Kommunale Verwaltung"
+AFAS = "AfA"
 
 # =============================================================================
 def config(settings):
@@ -163,11 +169,18 @@ def config(settings):
     settings.auth.realm_entity_types = ("org_group", "org_organisation")
     settings.auth.privileged_roles = {"MAP_ADMIN": "ADMIN",
                                       "SHELTER_MANAGER": "SHELTER_MANAGER",
+                                      "SHELTER_READER": "SHELTER_READER",
                                       "NEWSLETTER_AUTHOR": "NEWSLETTER_AUTHOR",
                                       }
 
-    from .customise.auth import realm_entity
+    from .customise.auth import realm_entity, \
+                                assign_role, \
+                                remove_role
+
     settings.auth.realm_entity = realm_entity
+
+    settings.auth.add_role = assign_role
+    settings.auth.remove_role = remove_role
 
     # -------------------------------------------------------------------------
     # CMS Module Settings
@@ -196,17 +209,23 @@ def config(settings):
 
     from .customise.cr import cr_shelter_resource, \
                               cr_shelter_controller, \
-                              cr_shelter_population_resource
+                              cr_shelter_population_resource, \
+                              cr_shelter_status_resource
 
     settings.customise_cr_shelter_resource = cr_shelter_resource
     settings.customise_cr_shelter_controller = cr_shelter_controller
 
     settings.customise_cr_shelter_population_resource = cr_shelter_population_resource
+    settings.customise_cr_shelter_status_resource = cr_shelter_status_resource
 
     # -------------------------------------------------------------------------
     # Document settings
     #
     settings.doc.mailmerge_fields = {}
+
+    from .customise.doc import doc_image_resource
+
+    settings.customise_doc_image_resource = doc_image_resource
 
     # -------------------------------------------------------------------------
     # Human Resource Module Settings
@@ -250,8 +269,10 @@ def config(settings):
     settings.org.offices_tab = False
     settings.org.country = False
 
-    from .customise.org import org_organisation_controller
+    from .customise.org import org_organisation_resource, \
+                               org_organisation_controller
 
+    settings.customise_org_organisation_resource = org_organisation_resource
     settings.customise_org_organisation_controller = org_organisation_controller
 
     # -------------------------------------------------------------------------

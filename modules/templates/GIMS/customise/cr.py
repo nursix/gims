@@ -5,9 +5,100 @@
 """
 
 from collections import OrderedDict
-from gluon import current, IS_EMPTY_OR, DIV
+
+from gluon import current, URL, \
+                  A, DIV, H4, IS_EMPTY_OR, TABLE, TD, TR
 
 from ..helpers import restrict_data_formats
+
+# =============================================================================
+def shelter_map_popup(record):
+    """
+        Custom map popup for shelters
+
+        Args:
+            record: the shelter record (Row)
+
+        Returns:
+            the shelter popup contents as DIV
+    """
+
+    db = current.db
+    s3db = current.s3db
+
+    T = current.T
+
+    table = s3db.cr_shelter
+
+    # Custom Map Popup
+    title = A(H4(record.name, _class="map-popup-title"),
+              _href = URL(c="cr", f="shelter", args=[record.id]),
+              _title = T("Open"),
+              )
+
+    details = TABLE(_class="map-popup-details")
+    append = details.append
+
+    def formrow(label, value, represent=None):
+        return TR(TD("%s:" % label, _class="map-popup-label"),
+                  TD(represent(value) if represent else value),
+                  )
+
+    # Organisation
+    organisation_id = record.organisation_id
+    if organisation_id:
+        append(formrow(table.organisation_id.label,
+                       A(table.organisation_id.represent(organisation_id),
+                         _href = URL("org", "organisation", args=[organisation_id]),
+                         ),
+                       ))
+
+    # Address
+    gtable = s3db.gis_location
+    query = (gtable.id == record.location_id)
+    location = db(query).select(gtable.addr_street,
+                                gtable.addr_postcode,
+                                gtable.L4,
+                                gtable.L3,
+                                limitby = (0, 1),
+                                ).first()
+
+    if location.addr_street:
+        append(formrow(gtable.addr_street.label, location.addr_street))
+    place = location.L4 or location.L3 or "?"
+    if location.addr_postcode:
+        place = "%s %s" % (location.addr_postcode, place)
+    append(formrow(T("Place"), place))
+
+    # Phone number
+    phone = record.phone
+    if phone:
+        append(formrow(T("Phone"), phone))
+
+    # Email address (as hyperlink)
+    email = record.email
+    if email:
+        append(formrow(table.email.label, A(email, _href="mailto:%s" % email)))
+
+    # Capacity / available capacity
+    capacity = record.capacity
+    append(formrow(table.capacity.label, capacity))
+    available_capacity = record.available_capacity
+    append(formrow(table.available_capacity.label, available_capacity))
+
+    # Status
+    append(formrow(table.status.label,
+                   table.status.represent(record.status),
+                   ))
+
+    # Comments
+    if record.comments:
+        append(formrow(table.comments.label,
+                       record.comments,
+                       represent = table.comments.represent,
+                       ))
+
+    return DIV(title, details, _class="map-popup")
 
 # -------------------------------------------------------------------------
 def cr_shelter_resource(r, tablename):
@@ -50,14 +141,9 @@ def cr_shelter_resource(r, tablename):
     field = table.organisation_id
     field.comment = None
 
-    # Custom label + tooltip for population
-    field = table.population
-    population_label = T("Current Population##shelter")
-    field.label = population_label
-    field.comment = DIV(_class="tooltip",
-                        _title="%s|%s" % (population_label,
-                                          T("Current shelter population as a number of people"),
-                                          ))
+    # Custom label for population_children
+    field = table.population_children
+    field.label = T("Current Population (Minors)")
 
     # Enable contact name and website fields
     field = table.contact_name
@@ -126,7 +212,7 @@ def cr_shelter_resource(r, tablename):
                                         label = T("Current Population##shelter"),
                                         fields = ["type_id",
                                                   "population_adults",
-                                                  "population_children",
+                                                  (T("Population (Minors)"), "population_children"),
                                                   ],
                                         ),
                    "population",
@@ -175,6 +261,7 @@ def cr_shelter_resource(r, tablename):
                    "name",
                    "shelter_type_id",
                    "status",
+                   (T("Capacity"), "capacity"),
                    (T("Available Capacity"), "available_capacity"),
                    (T("Place"), "place"),
                    (T("Contact"), "contact"),
@@ -248,10 +335,15 @@ def cr_shelter_controller(**attr):
 
         # Hide last update except for own records
         record = r.record
-        if not r.record or \
-            not auth.s3_has_permission("update", r.table, record_id=record.id):
+        if not record or \
+           not auth.s3_has_permission("update", r.table, record_id=record.id):
             s3.hide_last_update = True
 
+        if record and r.representation == "plain":
+            # Bypass REST method, return map popup directly
+            result = {"bypass": True,
+                      "output": shelter_map_popup(r.record),
+                      }
         return result
     s3.prep = prep
 
@@ -262,12 +354,28 @@ def cr_shelter_controller(**attr):
     return attr
 
 # -------------------------------------------------------------------------
+def cr_shelter_status_resource(r, tablename):
+
+    T = current.T
+    s3db = current.s3db
+
+    current.deployment_settings.base.bigtable = True
+
+    table = s3db.cr_shelter_status
+    field = table.population_children
+    field.label = T("Population (Minors)")
+
+# -------------------------------------------------------------------------
 def cr_shelter_population_resource(r, tablename):
 
     T = current.T
     s3db = current.s3db
 
     current.deployment_settings.base.bigtable = True
+
+    table = s3db.cr_shelter_population
+    field = table.population_children
+    field.label = T("Population (Minors)")
 
     from core import LocationFilter, \
                      OptionsFilter, \
@@ -309,9 +417,9 @@ def cr_shelter_population_resource(r, tablename):
         report_options = {
             "rows": axes,
             "cols": axes,
-            "fact": [(T("Current Population##shelter"), "sum(population)"),
+            "fact": [(T("Current Population (Total)"), "sum(population)"),
                      (T("Population (Adults)"), "sum(population_adults)"),
-                     (T("Population (Children)"), "sum(population_children)"),
+                     (T("Population (Minors)"), "sum(population_children)"),
                      ],
             "defaults": {"rows": "shelter_id$location_id$L2",
                          "cols": "type_id",
