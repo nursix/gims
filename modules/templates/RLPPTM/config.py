@@ -265,6 +265,7 @@ def config(settings):
     # -------------------------------------------------------------------------
     from .customise.disease import disease_case_diagnostics_resource, \
                                    disease_case_diagnostics_controller, \
+                                   disease_testing_device_resource, \
                                    disease_testing_report_resource, \
                                    disease_testing_report_controller, \
                                    disease_testing_demographic_resource, \
@@ -273,6 +274,7 @@ def config(settings):
 
     settings.customise_disease_case_diagnostics_resource = disease_case_diagnostics_resource
     settings.customise_disease_case_diagnostics_controller = disease_case_diagnostics_controller
+    settings.customise_disease_testing_device_resource = disease_testing_device_resource
     settings.customise_disease_testing_report_resource = disease_testing_report_resource
     settings.customise_disease_testing_report_controller = disease_testing_report_controller
     settings.customise_disease_testing_demographic_resource = disease_testing_demographic_resource
@@ -493,6 +495,10 @@ def config(settings):
             name_nice = T("Supply Chain Management"),
             #description = "Used within Inventory Management, Request Management and Asset Management",
             module_type = None, # Not displayed
+        )),
+        ("jnl", Storage(
+            name_nice = T("Management Journal"),
+            module_type = None,
         )),
     ])
 
