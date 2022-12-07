@@ -29,18 +29,22 @@ __all__ = ("CRReceptionCenterModel",
            )
 
 import datetime
+import json
 
 from collections import OrderedDict
 
-from gluon import current, Field, DIV, \
+from gluon import current, Field, URL, \
+                  A, DIV, INPUT, TABLE, TBODY, TD, TFOOT, TH, THEAD, TR, \
                   IS_EMAIL, IS_EMPTY_OR, IS_INT_IN_RANGE, IS_IN_SET, IS_NOT_EMPTY
 from gluon.storage import Storage
 
-from core import DataModel, S3Duplicate, S3LocationSelector, S3PriorityRepresent, \
+from core import CustomController, CRUDMethod, DataModel, FS, S3Report,  \
+                 S3Duplicate, S3LocationSelector, S3PriorityRepresent, \
                  S3Represent, S3ReusableField, S3SQLCustomForm, \
                  IS_ONE_OF, IS_PHONE_NUMBER_MULTI, \
                  get_form_record_id, s3_comments, s3_date, s3_meta_fields, \
-                 LocationFilter, OptionsFilter, TextFilter, get_filter_options
+                 s3_str, get_filter_options, \
+                 LocationFilter, OptionsFilter, TextFilter
 
 # =============================================================================
 class CRReceptionCenterModel(DataModel):
@@ -300,6 +304,12 @@ class CRReceptionCenterModel(DataModel):
                   report_options = report_options,
                   onaccept = self.reception_center_onaccept,
                   )
+
+        # Overview method
+        self.set_method(tablename,
+                        method = "overview",
+                        action = CapacityOverview,
+                        )
 
         # CRUD Strings
         crud_strings[tablename] = Storage(
@@ -574,5 +584,298 @@ class CRReceptionCenterModel(DataModel):
                    DIV(_class="occupancy %s" % css_class),
                    _class="occupancy-bar",
                    )
+
+# =============================================================================
+class CapacityOverview(CRUDMethod):
+    """
+        Custom overview method for reception center capacities/populations
+    """
+
+    def apply_method(self, r, **attr):
+        """
+            Main entry point for CRUD controller
+
+            Args:
+                r: the CRUDRequest
+                attr: controller parameters
+        """
+
+        if r.http == "GET":
+            if r.representation == "html":
+                output = self.overview(r, **attr)
+            else:
+                r.error(415, current.ERROR.BAD_FORMAT)
+        else:
+            r.error(405, current.ERROR.BAD_METHOD)
+
+        return output
+
+    # -------------------------------------------------------------------------
+    def overview(self, r, **attr):
+        """
+            Builds elements for the capacity overview page
+
+            Args:
+                r: the CRUDRequest
+                attr: controller parameters
+
+            Notes:
+                - uses templates/GIMS/views/capacity.html as view template
+                - injects the necessary client-side scripts
+        """
+
+        T = current.T
+
+        # Build components
+        output = {"title": T("Reception Centers Overview"),
+                  "table": self.render_table(),
+                  "chart": self.render_chart(),
+                  }
+
+        # Inject JS
+        self.inject_scripts()
+
+        # Set view
+        CustomController._view("GIMS", "capacity.html")
+
+        return output
+
+    # -------------------------------------------------------------------------
+    def render_table(self):
+        """
+            Builds a TABLE with current capacity/occupancy data of all
+            available reception centers
+
+            Returns:
+                TABLE
+        """
+
+        T = current.T
+
+        resource = self.resource
+
+        # Include only facilities in operation or standby
+        resource.add_filter(FS("status").belongs(("OP", "SB")))
+
+        # Fields to show (in order)
+        list_fields = ["id",
+                       (T("Place"), "location_id$L3"),
+                       (T("Facility"), "name"),
+                       "status",
+                       "capacity",
+                       "population",
+                       "population_unregistered",
+                       "available_capacity",
+                       "allocatable_capacity",
+                       "comments",
+                       "occupancy",
+                       ]
+
+        # Extract the data (least occupied facilities first)
+        data = resource.select(list_fields,
+                               represent = True,
+                               raw_data = True,
+                               limit = None,
+                               orderby = "cr_reception_center.occupancy asc"
+                               )
+        rfields = data.rfields
+
+        # Label row
+        thead = THEAD(TR([TH(rfield.label)
+                          for rfield in rfields
+                          if rfield.show and rfield.ftype != "id"
+                          ]))
+
+        # Data rows
+        capacity_fields = ["capacity",
+                           "population",
+                           "population_unregistered",
+                           "available_capacity",
+                           "allocatable_capacity",
+                           ]
+        totals = {fn: 0 for fn in capacity_fields}
+
+        tbody = TBODY()
+        append = tbody.append
+        for row in data.rows:
+            # Add to totals
+            raw = row._row
+            for fn in capacity_fields:
+                value = raw["cr_reception_center.%s" % fn]
+                if value:
+                    totals[fn] += value
+
+            # Render name as link to the facility
+            name = row["cr_reception_center.name"]
+            record_id = raw["cr_reception_center.id"]
+            if name and record_id:
+                url = URL(c="cr", f="reception_center", args=[record_id])
+                row["cr_reception_center.name"] = A(name, _href=url)
+
+            # Append data row to table
+            append(TR([TD(row[rfield.colname])
+                       for rfield in rfields if rfield.ftype != "id"
+                       ]))
+
+        # Compute total occupancy
+        capacity, population = totals["capacity"], totals["population"]
+        if capacity > 0:
+            occupancy = population * 100 // capacity
+        else:
+            occupancy = 100
+        field = self.resource.table.occupancy
+        totals["occupancy"] = field.represent(occupancy)
+
+        # Footer with totals
+        tr = TR()
+        append = tr.append
+        for rfield in rfields:
+            fn = rfield.field.name if rfield.field else None
+            if fn in totals:
+                append(TD(totals[fn]))
+            elif fn == "L3":
+                append(TD(T("Total##set")))
+            elif rfield.ftype != "id":
+                append(TD())
+        tfoot = TFOOT(tr)
+
+        # Combine table
+        table = TABLE(thead, tbody, tfoot)
+
+        return table
+
+    # -------------------------------------------------------------------------
+    def render_chart(self):
+        """
+            Builds the HTML structure for the population chart, with
+            time series data injected
+
+            Returns:
+                DIV
+        """
+
+        DAYS = 365
+
+        T = current.T
+
+        db = current.db
+        s3db = current.s3db
+
+        # Look up reception centers
+        ftable = s3db.cr_reception_center
+        facilities = db(ftable.deleted == False).select(ftable.id,
+                                                        ftable.name,
+                                                        )
+
+        # Use facility names as labels for data series
+        labels = {facility.id: facility.name for facility in facilities}
+        labels[0] = s3_str(T("Total##set"))
+
+        # Start time
+        start = datetime.datetime.utcnow().date() - datetime.timedelta(days=DAYS)
+        timestmp = int(datetime.datetime.combine(start, datetime.time(12,0,0)).timestamp())
+
+        # Extract and format the data
+        data = {"type": s3_str(T("Population##shelter")),
+                "population": self.get_time_series(facilities, DAYS),
+                "labels": labels,
+                "start": timestmp,
+                }
+
+        # Compose HTML
+        chart = DIV(INPUT(_id = "history-data",
+                          _type = "hidden",
+                          _value = json.dumps(data,
+                                              separators = (",", ":"),
+                                              ensure_ascii = False,
+                                              ),
+                          ),
+                    DIV(_id="history-chart"),
+                    _class = "capacity-chart",
+                    )
+
+        return chart
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def get_time_series(facilities, days):
+        """
+            Produces a time series of population numbers
+
+            Args:
+                facilities: the reception center Rows (must include record IDs)
+                days: number of days before today
+
+            Returns:
+                a JSON-serializable dict {facility_id: [population_number, ...]}
+
+            Note:
+                - result dict includes totals with facility_id=0
+        """
+
+        db = current.db
+        s3db = current.s3db
+
+        stable = s3db.cr_reception_center_status
+
+        start = datetime.datetime.utcnow().date() - datetime.timedelta(days=days)
+
+        # Lookup initial population numbers (per facility)
+        population = {}
+        for facility in facilities:
+            facility_id = facility.id
+            query = (stable.facility_id == facility_id) & \
+                    (stable.date < start) & \
+                    (stable.deleted == False)
+            initial = db(query).select(stable.status,
+                                       stable.population,
+                                       orderby = ~stable.date,
+                                       limitby = (0, 1),
+                                       ).first()
+
+            if initial and initial.population and initial.status in ("OP", "SB"):
+                population[facility_id] = [initial.population] * days
+            else:
+                population[facility_id] = [0] * days
+
+        # Lookup all subsequent status entries and fill the matrix
+        query = (stable.facility_id.belongs(population.keys())) & \
+                (stable.date != None) & \
+                (stable.date >= start) & \
+                (stable.deleted == False)
+        rows = db(query).select(stable.facility_id,
+                                stable.date,
+                                stable.status,
+                                stable.population,
+                                orderby = stable.date,
+                                )
+        for row in rows:
+            facility_id = row.facility_id
+
+            day = (row.date - start).days
+
+            series = population[facility_id]
+            series[(day-1):days] = [row.population if row.population else 0] * (days-day+1)
+
+        # Compute totals
+        total = [sum(series[i] for series in population.values()) for i in range(days)]
+        population[0] = total
+
+        return population
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def inject_scripts():
+        """
+            Inject client-side scripts for capacity overview page
+        """
+
+        s3 = current.response.s3
+
+        S3Report.inject_d3() # D3+NVD3
+
+        script = "/%s/static/themes/RLP/js/capacity.js" % current.request.application
+        if script not in s3.scripts:
+            s3.scripts.append(script)
 
 # END =========================================================================
