@@ -15,7 +15,7 @@ from gluon import Field, HTTP, SQLFORM, URL, current, redirect, \
 from gluon.storage import Storage
 
 from core import ConsentTracking, IS_PHONE_NUMBER_MULTI, \
-                 ICON, S3GroupedOptionsWidget, S3LocationSelector, \
+                 ICON, S3GroupedOptionsWidget, LocationSelector, \
                  CRUDRequest, S3CRUD, CustomController, FS, JSONERRORS, \
                  S3Represent, WithAdvice, s3_comments_widget, \
                  s3_get_extension, s3_mark_required, s3_str, \
@@ -624,11 +624,12 @@ class approve(CustomController):
                                 set_record_owner(ltable, link)
                                 s3db_onaccept(ltable, link, method="create")
 
-                        # Add verification defaults (after establishing type links)
-                        # - see organisation_postprocess
+                        # Add default tags, audit and verification status
                         from .models.org import TestProvider
                         provider = TestProvider(organisation_id)
                         provider.add_default_tags()
+                        provider.add_audit_status()
+                        # Must be done after linking to organisation type:
                         provider.add_verification_defaults()
 
                         # Update user
@@ -711,12 +712,13 @@ class approve(CustomController):
                     # Send welcome email
                     settings = current.deployment_settings
                     from .notifications import CMSNotifications
+                    data = {"name": organisation or org.name,
+                            "homepage": settings.get_base_public_url(),
+                            "profile": "%s/default/person" % settings.get_base_app_url(),
+                            }
                     error = CMSNotifications.send(user.email,
                                                   "WelcomeProvider",
-                                                  {"name": organisation or org.name,
-                                                   "homepage": settings.get_base_public_url(),
-                                                   "profile": URL("default", "person", host=True),
-                                                   },
+                                                  data,
                                                   module = "auth",
                                                   resource = "user",
                                                   )
@@ -1211,7 +1213,7 @@ class register(CustomController):
 
                       # -- Address --
                       Field("location", "json",
-                            widget = S3LocationSelector(
+                            widget = LocationSelector(
                                         levels = ("L1", "L2", "L3", "L4"),
                                         required_levels = ("L1", "L2", "L3"),
                                         show_address = True,
@@ -2287,6 +2289,21 @@ class geocode(CustomController):
 
         current.response.headers["Content-Type"] = "application/json"
         return output
+
+# =============================================================================
+class geocode_all_states(CustomController):
+    """
+        Wrapper custom geocoder:
+            - allow addresses in all federal states
+    """
+
+    def __call__(self):
+
+        # Use alternative class
+        from .rlpgeonames import rlp_GeoNamesAllStates
+        current.deployment_settings.gis.geocode_service = rlp_GeoNamesAllStates
+
+        return geocode()()
 
 # =============================================================================
 class ocert(CustomController):

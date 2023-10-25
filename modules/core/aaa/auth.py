@@ -45,7 +45,7 @@ from gluon.utils import web2py_uuid
 from s3dal import Row, Rows, Query, Field, original_tablename
 
 from ..controller import CRUDRequest
-from ..model import S3MetaFields, s3_comments
+from ..model import MetaFields, CommentsField
 from ..tools import IS_ISO639_2_LANGUAGE_CODE, S3Represent, S3Tracker, \
                     s3_addrow, s3_mark_required, s3_str
 
@@ -300,12 +300,12 @@ Thank you"""
                 Field("timestmp", "datetime",
                       default="",
                       readable=False, writable=False),
-                s3_comments(readable=False, writable=False),
+                CommentsField(readable=False, writable=False),
                 # Additional meta fields required for sync:
-                S3MetaFields.uuid(),
-                #S3MetaFields.mci(),
-                S3MetaFields.created_on(),
-                S3MetaFields.modified_on(),
+                MetaFields.uuid(),
+                #MetaFields.mci(),
+                MetaFields.created_on(),
+                MetaFields.modified_on(),
                 ]
 
             userfield = settings.login_userfield
@@ -366,11 +366,11 @@ Thank you"""
                       label = messages.label_description,
                       ),
                 # Additional meta fields required for sync:
-                S3MetaFields.created_on(),
-                S3MetaFields.modified_on(),
-                S3MetaFields.deleted(),
-                #S3MetaFields.deleted_fk(),
-                #S3MetaFields.deleted_rb(),
+                MetaFields.created_on(),
+                MetaFields.modified_on(),
+                MetaFields.deleted(),
+                #MetaFields.deleted_fk(),
+                #MetaFields.deleted_rb(),
                 migrate = migrate,
                 fake_migrate = fake_migrate,
                 )
@@ -398,7 +398,7 @@ Thank you"""
                       ),
                 migrate = migrate,
                 fake_migrate = fake_migrate,
-                *S3MetaFields.sync_meta_fields())
+                *MetaFields.sync_meta_fields())
             settings.table_membership = db[settings.table_membership_name]
 
         # Define Eden permission table
@@ -461,7 +461,7 @@ Thank you"""
                       ),
                 migrate = migrate,
                 fake_migrate = fake_migrate,
-                *S3MetaFields.sync_meta_fields())
+                *MetaFields.sync_meta_fields())
             settings.table_event = db[settings.table_event_name]
 
     # -------------------------------------------------------------------------
@@ -1429,29 +1429,6 @@ $('form.auth_consent').submit(S3ClearNavigateAwayConfirm);''')
                           position = i + 1,
                           )
 
-        # Add an opt in clause to receive emails depending on the deployment settings
-        # @ToDo: Replace with Consent Tracking
-        if deployment_settings.get_auth_opt_in_to_email():
-            field_id = "%s_opt_in" % utablename
-            comment = DIV(DIV(_class = "tooltip",
-                              _title = "%s|%s" % (T("Mailing list"),
-                                                  T("By selecting this you agree that we may contact you."))))
-            checked = deployment_settings.get_auth_opt_in_default() and "selected"
-            s3_addrow(form,
-                      LABEL("%s:" % T("Receive updates"),
-                            _for = "opt_in",
-                            _id = field_id + SQLFORM.ID_LABEL_SUFFIX,
-                            ),
-                      INPUT(_name = "opt_in",
-                            _id = field_id,
-                            _type = "checkbox",
-                            _checked = checked,
-                            ),
-                      comment,
-                      formstyle,
-                      field_id + SQLFORM.ID_ROW_SUFFIX,
-                      )
-
         # S3: Insert Home phone field into form
         if deployment_settings.get_auth_registration_requests_home_phone():
             for i, row in enumerate(form[0].components):
@@ -1743,8 +1720,7 @@ $('form.auth_consent').submit(S3ClearNavigateAwayConfirm);''')
                 ):
         """
             Returns a form that lets the user change his/her profile
-                - patched for S3 to use s3_mark_required and handle
-                  opt_in mailing lists
+                - patched for S3 to use s3_mark_required
         """
 
         if not self.is_logged_in():
@@ -1782,56 +1758,6 @@ $('form.auth_consent').submit(S3ClearNavigateAwayConfirm);''')
         if log == DEFAULT:
             log = messages.profile_log
         labels = s3_mark_required(utable)[0]
-
-        # If we have an opt_in and some post_vars then update the opt_in value
-        # @ToDo: Replace with an AuthConsent-integrated solution
-        opt_in_to_email = deployment_settings.get_auth_opt_in_to_email()
-        if opt_in_to_email:
-            team_list = deployment_settings.get_auth_opt_in_team_list()
-            if request.post_vars:
-                removed = []
-                selected = []
-                for opt_in in team_list:
-                    if opt_in in request.post_vars:
-                        selected.append(opt_in)
-                    else:
-                        removed.append(opt_in)
-                db = current.db
-                s3db = current.s3db
-                ptable = s3db.pr_person
-                putable = s3db.pr_person_user
-                query = (putable.user_id == request.post_vars.id) & \
-                        (putable.pe_id == ptable.pe_id)
-                person_id = db(query).select(ptable.id, limitby=(0, 1)).first().id
-                db(ptable.id == person_id).update(opt_in = selected)
-
-                g_table = s3db["pr_group"]
-                gm_table = s3db["pr_group_membership"]
-                # Remove them from any team they are a member of in the removed list
-                for team in removed:
-                    query = (g_table.name == team) & \
-                            (gm_table.group_id == g_table.id) & \
-                            (gm_table.person_id == person_id)
-                    gm_rec = db(query).select(g_table.id, limitby=(0, 1)).first()
-                    if gm_rec:
-                        db(gm_table.id == gm_rec.id).delete()
-                # Add them to the team (if they are not already a team member)
-                for team in selected:
-                    query = (g_table.name == team) & \
-                            (gm_table.group_id == g_table.id) & \
-                            (gm_table.person_id == person_id)
-                    gm_rec = db(query).select(g_table.id, limitby=(0, 1)).first()
-                    if not gm_rec:
-                        query = (g_table.name == team)
-                        team_rec = db(query).select(g_table.id,
-                                                    limitby=(0, 1)).first()
-                        # if the team doesn't exist then add it
-                        if team_rec == None:
-                            team_id = g_table.insert(name=team, group_type=5)
-                        else:
-                            team_id = team_rec.id
-                        gm_table.insert(group_id = team_id,
-                                        person_id = person_id)
 
         formstyle = deployment_settings.get_ui_formstyle()
         current.response.form_label_separator = ""
@@ -1872,36 +1798,6 @@ $('form.auth_consent').submit(S3ClearNavigateAwayConfirm);''')
                 next = self.url(next.replace("[id]", str(form.vars.id)))
             redirect(next)
 
-        if opt_in_to_email:
-            T = current.T
-            ptable = s3db.pr_person
-            ltable = s3db.pr_person_user
-            team_list = deployment_settings.get_auth_opt_in_team_list()
-            query = (ltable.user_id == form.record.id) & \
-                    (ltable.pe_id == ptable.pe_id)
-            db_opt_in_list = db(query).select(ptable.opt_in,
-                                              limitby=(0, 1)).first().opt_in
-            for opt_in in team_list:
-                field_id = "%s_opt_in_%s" % (utable, team_list)
-                if opt_in in db_opt_in_list:
-                    checked = "selected"
-                else:
-                    checked = None
-                s3_addrow(form,
-                          LABEL(T("Receive %(opt_in)s updates:") % \
-                                                        {"opt_in": opt_in},
-                                _for = "opt_in",
-                                _id = field_id + SQLFORM.ID_LABEL_SUFFIX,
-                                ),
-                          INPUT(_name = opt_in,
-                                _id = field_id,
-                                _type = "checkbox",
-                                _checked = checked,
-                                ),
-                          "",
-                          formstyle,
-                          field_id + SQLFORM.ID_ROW_SUFFIX,
-                          )
         return form
 
     # -------------------------------------------------------------------------
@@ -2819,7 +2715,7 @@ Please go to %(url)s to approve this user."""
         return approved
 
     # -------------------------------------------------------------------------
-    def s3_approve_user(self, user, password=None):
+    def s3_approve_user(self, user, password=None, defaults=False):
         """
             Adds user to the 'Authenticated' role, and any default roles
 
@@ -2841,21 +2737,29 @@ Please go to %(url)s to approve this user."""
 
         db = current.db
         s3db = current.s3db
+
         deployment_settings = current.deployment_settings
         settings = self.settings
 
-        utable = settings.table_user
+        sr = self.get_system_roles()
 
-        # Add to 'Authenticated' role
-        authenticated = self.id_group("Authenticated")
+        # Add to AUTHENTICATED role
         add_membership = self.add_membership
-        add_membership(authenticated, user_id)
+        add_membership(sr.AUTHENTICATED, user_id)
+
+        # Reload the user record if any details are missing
+        utable = settings.table_user
+        fields = ("id", "email", "organisation_id", "org_group_id", "site_id", "link_user_to")
+        if any(fn not in user for fn in fields):
+            user = db(utable.id == user_id).select(*fields, limitby=(0, 1)).first()
+        if not user:
+            return
 
         organisation_id = user.organisation_id
+        link_user_to = user.link_user_to or utable.link_user_to.default or []
 
         # Add User to required registration roles
         entity_roles = deployment_settings.get_auth_registration_roles()
-        link_user_to = user.link_user_to or utable.link_user_to.default or []
         if entity_roles:
             gtable = settings.table_group
             get_pe_id = s3db.pr_get_pe_id
@@ -2879,41 +2783,40 @@ Please go to %(url)s to approve this user."""
 
         if organisation_id and \
            deployment_settings.get_auth_org_admin_to_first():
-            # If this is the 1st user to register for an Org, give them ORG_ADMIN for that Org
+            # If this is the 1st user to register for an organisation, give
+            # them the OrgAdmin role for that organisation
             entity = s3db.pr_get_pe_id("org_organisation", organisation_id)
-            gtable = settings.table_group
-            ORG_ADMIN = db(gtable.uuid == "ORG_ADMIN").select(gtable.id,
-                                                              limitby=(0, 1)
-                                                              ).first().id
-            mtable = settings.table_membership
-            query = (mtable.group_id == ORG_ADMIN) & \
-                    (mtable.pe_id == entity)
-            exists = db(query).select(mtable.id,
-                                      limitby=(0, 1))
-            if not exists:
-                add_membership(ORG_ADMIN, user_id, entity=entity)
 
+            # We only need to check whether there is an OrgAdmin yet, because
+            # if there were any other user for this organisation, they would
+            # necessarily be OrgAdmin due to this rule
+            mtable = settings.table_membership
+            query = (mtable.group_id == sr.ORG_ADMIN) & \
+                    (mtable.pe_id == entity)
+            if not db(query).select(mtable.id, limitby=(0, 1)).first():
+                # No OrgAdmin yet
+                add_membership(sr.ORG_ADMIN, user_id, entity=entity)
+
+        # Link user to person, staff and other records as required
         self.s3_link_user(user)
 
         # Track consent
         if deployment_settings.get_auth_consent_tracking():
             ConsentTracking.register_consent(user_id)
 
-        user_email = db(utable.id == user_id).select(utable.email,
-                                                     ).first().email
-        self.s3_auth_user_register_onaccept(user_email, user_id)
+        # Run any custom on-approval routines
+        self.s3_auth_user_register_onaccept(user.email, user_id)
 
         if current.response.s3.bulk is True:
             # Non-interactive imports should stop here
             return
 
-        # Allow them to login
-        db(utable.id == user_id).update(registration_key = "")
+        # Allow them to login (enable the account)
+        db(utable.id == user_id).update(registration_key="")
 
-        # Approve User's Organisation
+        # Approve User's Organisation (if they created a new one during registration)
         if organisation_id and \
-           "org_organisation" in \
-           deployment_settings.get_auth_record_approval_required_for():
+           "org_organisation" in deployment_settings.get_auth_record_approval_required_for():
             org_resource = s3db.resource("org_organisation",
                                          organisation_id,
                                          # Do not re-approve (would
@@ -3066,11 +2969,6 @@ Please go to %(url)s to approve this user."""
 
         person_ids = [] # Collect the person IDs
 
-        if current.request.vars.get("opt_in", None):
-            opt_in = current.deployment_settings.get_auth_opt_in_team_list()
-        else:
-            opt_in = []
-
         for row in rows:
 
             # The user record
@@ -3217,13 +3115,11 @@ Please go to %(url)s to approve this user."""
                     if middle_name:
                         person_id = ptable.insert(first_name = first_name,
                                                   middle_name = last_name,
-                                                  opt_in = opt_in,
                                                   modified_by = user.id,
                                                   **owner)
                     else:
                         person_id = ptable.insert(first_name = first_name,
                                                   last_name = last_name,
-                                                  opt_in = opt_in,
                                                   modified_by = user.id,
                                                   **owner)
                     if person_id:
@@ -3242,6 +3138,7 @@ Please go to %(url)s to approve this user."""
                                               entity=realm_entity,
                                               )
                         owner.realm_entity = realm_entity
+                        s3db.onaccept(ptable, person, method="create")
 
                         # Insert a link
                         ltable.insert(user_id=user.id, pe_id=pe_id)
@@ -3252,24 +3149,6 @@ Please go to %(url)s to approve this user."""
                                       priority = 1,
                                       value = email,
                                       **owner)
-
-                        # Add the user to each team if they have chosen to opt-in
-                        gtable = s3db.pr_group
-                        mtable = s3db.pr_group_membership
-
-                        for team in opt_in:
-                            team_rec = db(gtable.name == team).select(gtable.id,
-                                                                      limitby=(0, 1)
-                                                                      ).first()
-                            # if the team doesn't exist then add it
-                            if team_rec == None:
-                                team_id = gtable.insert(name = team,
-                                                        group_type = 5)
-                            else:
-                                team_id = team_rec.id
-                            mtable.insert(group_id = team_id,
-                                          person_id = person_id,
-                                          )
 
                         person_ids.append(person_id)
 
@@ -3931,6 +3810,27 @@ Please go to %(url)s to approve this user."""
     # -------------------------------------------------------------------------
     # Role Management
     # -------------------------------------------------------------------------
+    def get_role_id(self, uid):
+        """
+            Get the role ID for a role UID
+
+            Args:
+                uid: the role UID
+            Returns:
+                the corresponding auth_group record ID
+        """
+
+        gtable = self.settings.table_group
+        query = (gtable.uuid == uid) & (gtable.deleted == False)
+
+        row = current.db(query).select(gtable.id,
+                                       cache = (current.cache.ram, 600),
+                                       limitby=(0, 1),
+                                       ).first()
+
+        return row.id if row else None
+
+    # -------------------------------------------------------------------------
     def get_system_roles(self):
         """
             Get the IDs of the session roles by their UIDs, and store them
@@ -3962,10 +3862,18 @@ Please go to %(url)s to approve this user."""
     # -------------------------------------------------------------------------
     def get_managed_orgs(self):
         """
-            Get the pe_ids of all managed organisations (to authorize
-            role assignments)
+            Get the pe_ids of all managed organisations, e.g. for filters
 
-            TODO use this in admin/user controller
+            Returns:
+                - True if unrestricted (i.e. site-wide role)
+                - list of pe_ids if restricted
+                - None if user does not manage any orgs
+
+            Note:
+                The result only means that the user has a *_ADMIN role
+                for those organisations, but that does not imply any
+                particular permissions =>
+                use auth.permission.permitted_realms for access control
         """
 
         user = self.user
@@ -3978,7 +3886,7 @@ Please go to %(url)s to approve this user."""
         if has_role(sr.ADMIN):
             return True
 
-        elif has_role(sr.ORG_ADMIN):
+        elif self.s3_has_roles((sr.ORG_ADMIN, sr.ORG_GROUP_ADMIN)):
             if not self.permission.entity_realm:
                 organisation_id = user.organisation_id
                 if not organisation_id:
@@ -3994,9 +3902,15 @@ Please go to %(url)s to approve this user."""
                                                  )
                 pe_ids.append(pe_id)
             else:
-                pe_ids = self.user.realms[sr.ORG_ADMIN]
-                if pe_ids is None:
-                    return True
+                pe_ids = set()
+                for role in (sr.ORG_ADMIN, sr.ORG_GROUP_ADMIN):
+                    if role not in self.user.realms:
+                        continue
+                    realm = self.user.realms[role]
+                    if realm is None:
+                        return True
+                    pe_ids.update(realm)
+                pe_ids = list(pe_ids) if pe_ids else None
             return pe_ids
 
         else:
@@ -4027,6 +3941,14 @@ Please go to %(url)s to approve this user."""
             s3db = current.s3db
 
             user_id = self.user.id
+
+            # Logout disabled/blocked users immediately
+            utable = self.settings.table_user
+            query = (utable.id == user_id) & \
+                    (utable.registration_key.belongs(("disabled", "blocked")))
+            if db(query).select(utable.id, limitby=(0, 1)).first():
+                session.renew(clear_session=True)
+                redirect(URL(c="default", f="index"))
 
             # Set pe_id for current user
             ltable = s3db.table("pr_person_user")
@@ -4470,16 +4392,8 @@ Please go to %(url)s to approve this user."""
             elif role in system_roles:
                 role = system_roles[role]
             else:
-                gtable = self.settings.table_group
-                query = (gtable.uuid == role) & \
-                        (gtable.deleted == False)
-                row = current.db(query).select(gtable.id,
-                                               cache = (current.cache.ram, 600),
-                                               limitby = (0, 1),
-                                               ).first()
-                if row:
-                    role = row.id
-                else:
+                role = self.get_role_id(role)
+                if not role:
                     return False
 
         # Check the realm
@@ -4720,8 +4634,9 @@ Please go to %(url)s to approve this user."""
                 pass
             else:
                 row = current.db(query).select(htable.id,
-                                               orderby = ~htable.modified_on,
+                                               cache = s3db.cache,
                                                limitby = (0, 1),
+                                               orderby = ~htable.modified_on,
                                                ).first()
 
         return row.id if row else None

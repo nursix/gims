@@ -133,7 +133,7 @@ def cr_shelter_resource(r, tablename):
     from core import LocationFilter, \
                      OptionsFilter, \
                      RangeFilter, \
-                     S3LocationSelector, \
+                     LocationSelector, \
                      S3PriorityRepresent, \
                      S3SQLCustomForm, \
                      S3SQLInlineComponent, \
@@ -184,12 +184,12 @@ def cr_shelter_resource(r, tablename):
     requires = field.requires
     if isinstance(requires, IS_EMPTY_OR):
         field.requires = requires.other
-    field.widget = S3LocationSelector(levels = ("L1", "L2", "L3", "L4"),
-                                      required_levels = ("L1", "L2", "L3"),
-                                      show_address = True,
-                                      show_postcode = True,
-                                      show_map = True,
-                                      )
+    field.widget = LocationSelector(levels = ("L1", "L2", "L3", "L4"),
+                                    required_levels = ("L1", "L2", "L3"),
+                                    show_address = True,
+                                    show_postcode = True,
+                                    show_map = True,
+                                    )
     current.response.s3.scripts.append("/%s/static/themes/RLP/js/geocoderPlugin.js" % r.application)
 
     # Color-coded status representation
@@ -522,6 +522,85 @@ def cr_shelter_population_controller(**attr):
     s3.prep = prep
 
     return attr
+
+# -------------------------------------------------------------------------
+def occupancy_rate_estimate(row):
+    """
+        Field method for reception centers to calculate the occupancy
+        rate relative to the estimated allocable capacity
+    """
+
+    if hasattr(row, "cr_reception_center"):
+        row = row.cr_reception_center
+    try:
+        population = row.population
+        capacity = row.allocable_capacity_estimate
+    except AttributeError:
+        return None
+
+    if population is None or population < 0:
+        population = 0
+
+    rate = (population * 100 // capacity) if capacity else 100
+
+    return rate
+
+# -------------------------------------------------------------------------
+def free_capacity_estimate(row):
+    """
+        Field method for reception centers to calculate the free
+        capacity relative to the estimated allocable capacity
+    """
+
+    if hasattr(row, "cr_reception_center"):
+        row = row.cr_reception_center
+    try:
+        population = row.population
+        capacity = row.allocable_capacity_estimate
+    except AttributeError:
+        return None
+
+    if population is None or population < 0:
+        population = 0
+    if capacity is None or capacity < 0:
+        capacity = 0
+    free_capacity = max(0, capacity - population)
+
+    return free_capacity
+
+# -------------------------------------------------------------------------
+def cr_reception_center_resource(r, tablename):
+
+    has_role = current.auth.s3_has_role
+
+    table = current.s3db.cr_reception_center
+
+    # Field methods for computed values by estimated capacity
+    from core import s3_fieldmethod
+    from ..models.cr import CRReceptionCenterModel
+    table.occupancy_rate_estimate = s3_fieldmethod("occupancy_rate_estimate",
+                                                   occupancy_rate_estimate,
+                                                   represent = CRReceptionCenterModel.occupancy_represent,
+                                                   )
+    table.free_capacity_estimate = s3_fieldmethod("free_capacity_estimate",
+                                                  free_capacity_estimate,
+                                                  represent = lambda v, row=None: v if v is not None else "-",
+                                                  )
+
+    record = r.record if r.resource.tablename == "cr_reception_center" else None
+
+    # Restrict modifications field-wise by role
+    if record:
+        is_manager = has_role("AFA_MANAGER", for_pe=record.realm_entity) or \
+                     has_role("AFA_MANAGER", for_pe=0)
+        is_coordinator = has_role("AFA_COORDINATOR")
+
+        for fn in table.fields:
+            field = table[fn]
+            if fn in ("capacity", "allocable_capacity_estimate"):
+                field.writable = is_coordinator
+            else:
+                field.writable = is_manager
 
 # -------------------------------------------------------------------------
 def cr_reception_center_controller(**attr):

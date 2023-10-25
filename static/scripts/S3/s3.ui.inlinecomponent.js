@@ -467,7 +467,7 @@
             // Submit the form when all inline validations are done
             var ns = this.eventNamespace + this.id,
                 self = this;
-            $.when.apply(null, validations).then(
+            $.when.apply($, validations).then(
                 function() {
                     // Validation succeeded => submit the form
                     self.submitInProgress = false;
@@ -477,7 +477,7 @@
                     // Validation failed
                     // => restore any rejected promises
                     for (var key in pendingValidations) {
-                        if (pendingValidations[key].isRejected()) {
+                        if (pendingValidations[key].state() == "rejected") {
                             pendingValidations[key] = $.Deferred();
                         }
                     }
@@ -1027,8 +1027,8 @@
                             input.multiselect('refresh');
                         } else if (input.hasClass('groupedopts-widget') && input.groupedopts('instance')) {
                             input.groupedopts('refresh');
-                        } else if (input.hasClass('location-selector') && input.locationselector('instance')) {
-                            input.locationselector('refresh');
+                        } else if (input.hasClass('location-selector') && input.selectLocation('instance')) {
+                            input.selectLocation('refresh');
                         } else if (input.hasClass('s3-hierarchy-input')) {
                             var parent = input.parent();
                             if (parent.hierarchicalopts('instance')) {
@@ -1164,8 +1164,8 @@
                         currentField.groupedopts('refresh');
 
                     } else if (currentField.hasClass('location-selector') &&
-                               currentField.locationselector('instance')) {
-                        currentField.locationselector('refresh');
+                               currentField.selectLocation('instance')) {
+                        currentField.selectLocation('refresh');
 
                     } else if (currentField.hasClass('s3-hierarchy-input')) {
 
@@ -1342,6 +1342,8 @@
                         throbber.hide();
                         add_button.removeClass('hide').show();
                     }
+                    // Propagate the rejected-status
+                    return validated;
                 });
         },
 
@@ -1485,6 +1487,8 @@
                             throbber.hide();
                             rdy_button.removeClass('hide').show();
                         }
+                        // Propagate the rejected-status
+                        return validated;
                     });
             }
         },

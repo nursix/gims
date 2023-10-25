@@ -139,7 +139,7 @@ class XLSXWriter(FormatWriter):
         # Add the work sheets
 
         # Characters /\?*[] not allowed in sheet names
-        sheet_name = " ".join(re.sub(r"[\\\/\?\*\[\]]", " ", s3_str(title)).split())
+        sheet_name = " ".join(re.sub(r"[\\\/\?\*\[\]:]", " ", s3_str(title)).split())
 
         batch, remaining = rows[:batch_size], rows[batch_size:]
         sheet_number = 0
@@ -378,7 +378,7 @@ class XLSXWriter(FormatWriter):
             Args:
                 rfield: the column (S3ResourceField)
                 num_levels: the number of levels (from root)
-                rows: the Rows from S3ResourceData
+                rows: the Rows from ResourceData
 
             Returns:
                 list of keys (column names) for the inserted columns

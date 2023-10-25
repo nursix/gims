@@ -40,7 +40,7 @@ from ..resource import DataExporter
 from ..tools import JSONSEPARATORS, S3DateTime, get_crud_string, \
                     s3_decode_iso_datetime, s3_represent_value, \
                     s3_set_extension, s3_str, s3_validate
-from ..ui import S3EmbeddedComponentWidget, S3Selector, ICON, S3SQLDefaultForm
+from ..ui import S3EmbeddedComponentWidget, LocationSelector, ICON, S3SQLDefaultForm
 
 from .base import CRUDMethod
 
@@ -1408,13 +1408,6 @@ class S3CRUD(CRUDMethod):
                                        list_fields = list_fields,
                                        **attr)
 
-        elif representation == "msg":
-            if r.http == "POST":
-                from ..msg import S3Notifications
-                output = S3Notifications.send(r, resource)
-            else:
-                r.error(405, current.ERROR.BAD_METHOD)
-
         elif representation == "card":
             if not get_config("pdf_card_layout"):
                 # This format is not supported for this resource
@@ -2263,7 +2256,7 @@ class S3CRUD(CRUDMethod):
                                           not os.path.isfile(fullname)
 
                 # Validate and serialize the value
-                if isinstance(widget, S3Selector):
+                if isinstance(widget, LocationSelector):
                     # Use widget-validator instead of field-validator
                     if not skip_validation:
                         value, error = widget.validate(value,

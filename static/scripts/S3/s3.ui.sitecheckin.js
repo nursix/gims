@@ -143,8 +143,13 @@
 
                         // Show error message on label input
                         var msg = $('<div class="error_wrapper"><div id="label__error" class="error" style="display: block;">' + data.e + '</div></div>').hide();
-                        msg.insertAfter(labelInput).slideDown();
 
+                        var outer = labelInput.closest('.controls');
+                        if (outer.length) {
+                            msg.appendTo(outer).slideDown();
+                        } else {
+                            msg.insertAfter(labelInput).slideDown();
+                        }
                     } else {
 
                         // Show person data
@@ -467,6 +472,9 @@
             // Cancel-button to clear the form
             form.find('a.cancel-action, .clear-btn').on('click' + ns, function(e) {
                 e.preventDefault();
+                self._clearForm();
+            });
+            $('.qrscan-btn', form).on('click' + ns, function(e) {
                 self._clearForm();
             });
 

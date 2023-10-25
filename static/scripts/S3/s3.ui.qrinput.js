@@ -4,6 +4,9 @@
  * @copyright 2021 (c) Sahana Software Foundation
  * @license MIT
  */
+
+/* jshint esversion: 6 */
+
 (function($, undefined) {
 
     "use strict";
@@ -21,8 +24,12 @@
          */
         options: {
 
-            workerPath: null
+            workerPath: null,
 
+            inputPattern: null, // e.g. '(?<code>\\d+)##.+##.+##.+'
+            inputIndex: null, // e.g. 'code'
+
+            keepOriginalInput: false
         },
 
         /**
@@ -43,11 +50,12 @@
 
             this.container = $(this.element).closest('.qrinput');
             this.scanButton = $('.qrscan-btn', this.container);
+            this.hiddenInput = $(this.element).siblings('.qrinput-hidden');
 
             // Set up qr-scanner worker
-            var workerPath = this.options.workerPath;
+            let workerPath = this.options.workerPath;
             if (workerPath) {
-                QrScanner.WORKER_PATH = this.options.workerPath;
+                QrScanner.WORKER_PATH = workerPath;
             }
 
             this.refresh();
@@ -58,7 +66,7 @@
          */
         _destroy: function() {
 
-            var scanner = this.scanner,
+            let scanner = this.scanner,
                 videoInput = this.videoInput;
 
             if (scanner) {
@@ -79,7 +87,8 @@
          */
         refresh: function() {
 
-            var $el = $(this.element),
+            let $el = $(this.element),
+                $hidden = this.hiddenInput,
                 self = this;
 
             this._unbindEvents();
@@ -88,9 +97,11 @@
 
             if (self.scanButton.length) {
 
+                let postprocess = this.options.postprocess;
+
                 QrScanner.hasCamera().then(function(hasCamera) {
 
-                    var scanButton = self.scanButton;
+                    let scanButton = self.scanButton;
 
                     if (!hasCamera) {
                         scanButton.prop('disabled', true);
@@ -99,20 +110,21 @@
                         scanButton.prop('disabled', false);
                     }
 
-                    var scanner,
+                    let scanner,
                         scanForm = $('<div class="qrinput-scan">'),
                         // TODO make success-message configurable
                         success = $('<div class="qrinput-success">').html('<i class="fa fa-check">').hide().appendTo(scanForm),
+                        invalid = $('<div class="qrinput-invalid">').html('<i class="fa fa-times">').hide().appendTo(scanForm),
                         videoInput = $('<video>').appendTo(scanForm);
 
                     // TODO make width/height configurable or auto-adapt to screen size
                     videoInput.css({width: '300', height: '300'});
 
-                    var dialog = scanForm.dialog({
+                    let dialog = scanForm.dialog({
                         title: 'Scan QR Code',
                         autoOpen: false,
                         modal: true,
-                        classes: {"ui-dialog": "qrinput-dialog"},
+                        'classes': {'ui-dialog': 'qrinput-dialog'},
                         close: function() {
                             if (scanner) {
                                 scanner.stop();
@@ -122,17 +134,48 @@
                         }
                     });
 
+                    const canVibrate = window.navigator.vibrate;
                     scanButton.on('click', function() {
-                        videoInput.show();
+                        invalid.hide();
                         success.hide();
+                        videoInput.show();
                         dialog.dialog('open');
                         scanner = new QrScanner(videoInput.get(0),
                             function(result) {
+                                // Hide the scanner
                                 scanner.stop();
                                 videoInput.hide();
-                                success.show();
-                                window.navigator.vibrate(100);
-                                $el.val(result).trigger('change' + self.eventNamespace);
+                                if (canVibrate) {
+                                    window.navigator.vibrate(100);
+                                }
+
+                                // Try parsing the result
+                                let parsed = '';
+                                try {
+                                    parsed = self._parse(result);
+                                } catch(e) {
+                                    parsed = false;
+                                }
+
+                                // Handle invalid results
+                                if (parsed === false) {
+                                    result = '';
+                                    parsed = '';
+                                    invalid.show();
+                                } else {
+                                    success.show();
+                                }
+
+                                // Replace the original result with parsed value?
+                                if (!self.options.keepOriginalInput) {
+                                    result = parsed;
+                                }
+
+                                // Update the inputs
+                                $el.val(parsed).trigger('change' + self.eventNamespace);
+                                $hidden.val(result).trigger('change' + self.eventNamespace);
+
+                                // Close the dialog
                                 setTimeout(function() {
                                     dialog.dialog('close');
                                 }, 400);
@@ -155,7 +198,44 @@
          */
         _clearInput: function() {
 
+            this.hiddenInput.val('').trigger('change' + this.eventNamespace);
             $(this.element).val('').trigger('change' + this.eventNamespace);
+        },
+
+        /**
+         * Parse input
+         *
+         * @param {string} result - the result from the QR scanning
+         */
+        _parse: function(result) {
+
+            let opts = this.options,
+                pattern = opts.inputPattern;
+
+            if (!result || !pattern) {
+                return result;
+            }
+
+            let expr = new RegExp(pattern, 'g'),
+                parsed = expr.exec(result);
+            if (parsed) {
+                let index = opts.inputIndex;
+                if (!index && index !== 0) {
+                    parsed = result;
+                } else if (typeof index == 'string') {
+                    parsed = parsed.groups[index];
+                } else {
+                    parsed = parsed[index];
+                }
+            } else {
+                // Invalid input - do not expose the contents
+                parsed = false;
+            }
+            if (parsed === undefined) {
+                parsed = false;
+            }
+
+            return parsed;
         },
 
         /**
@@ -163,12 +243,16 @@
          */
         _bindEvents: function() {
 
-            var $el = $(this.element),
+            let $el = $(this.element),
                 ns = this.eventNamespace,
                 self = this;
 
-            $('.clear-btn', $el.closest('.qrinput')).on('click' + ns, function() {
+            $('.clear-btn', $el.closest('.qrinput')).off(ns).on('click' + ns, function() {
                 self._clearInput();
+            });
+
+            $el.off(ns).on('input', function() {
+                self.hiddenInput.val($el.val().trim());
             });
 
             return true;
@@ -179,8 +263,10 @@
          */
         _unbindEvents: function() {
 
-            var $el = $(this.element),
+            let $el = $(this.element),
                 ns = this.eventNamespace;
+
+            $el.off(ns);
 
             $('.clear-btn', $el.closest('.qrinput')).off(ns);
 

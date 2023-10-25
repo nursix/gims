@@ -52,19 +52,19 @@ def user():
         ADMIN = True
         pe_ids = None
 
-    elif s3_has_role("ORG_ADMIN"):
-        pe_ids = auth.get_managed_orgs()
-        if pe_ids is None:
-            # OrgAdmin with default realm, but user not affiliated with any org
-            auth.permission.fail()
-        elif pe_ids is not True:
-            # OrgAdmin for certain organisations
+    elif auth.s3_has_roles(("ORG_ADMIN", "ORG_GROUP_ADMIN")):
+        pe_ids = auth.permission.permitted_realms("auth_user", "update")
+        if pe_ids:
+            # Restricted to certain organisations
             otable = s3db.org_organisation
             s3.filter = (otable.pe_id.belongs(pe_ids)) & \
                         (table.organisation_id == otable.id)
+        elif pe_ids is not None:
+            # Not allowed for any organisations
+            auth.permission.fail()
         else:
-            # OrgAdmin with site-wide permission
-            pe_ids = None
+            # Allowed for all organisations
+            pass
     else:
         auth.permission.fail()
 
@@ -137,6 +137,25 @@ def user():
         session.confirmation = T("User Account has been Disabled")
         redirect(URL(args=[]))
 
+    def enable_user(r, **args):
+        user_id = r.id
+        if not user_id:
+            session.error = T("Can only re-enable 1 record at a time!")
+            redirect(URL(args=[]))
+
+        query = (table.id == user_id)
+        row = db(query).select(table.id,
+                               table.registration_key,
+                               limitby = (0, 1),
+                               ).first()
+        if row and row.registration_key != "disabled":
+            session.error = T("User Account not Disabled")
+            redirect(URL(args=[]))
+
+        row.update_record(registration_key=None)
+        session.confirmation = T("User Account has been Re-enabled")
+        redirect(URL(args=[]))
+
     def approve_user(r, **args):
         if not r.id:
             session.error = T("Can only approve 1 record at a time!")
@@ -176,6 +195,10 @@ def user():
     set_method("auth_user",
                method = "disable",
                action = disable_user)
+
+    set_method("auth_user",
+               method = "enable",
+               action = enable_user)
 
     set_method("auth_user",
                method = "approve",
@@ -334,20 +357,30 @@ def user():
 
                 # Only show the disable button if the user is not currently disabled
                 table = r.table
-                query = (table.registration_key == None) | \
-                        (table.registration_key == "")
+                query = (table.registration_key == "disabled") & \
+                        (table.deleted == False)
                 rows = db(query).select(table.id)
-                restrict = [str(row.id) for row in rows]
+                disabled = [str(row.id) for row in rows]
+
+                actions.append({"label": str(T("Re-enable")),
+                                "restrict": disabled,
+                                "url": URL(c="admin", f="user",
+                                           args = ["[id]", "enable"],
+                                           ),
+                                "_class": "action-btn",
+                                })
+
                 actions.append({"label": str(T("Disable")),
-                                "restrict": restrict,
+                                "exclude": disabled,
                                 "url": URL(c="admin", f="user",
                                            args = ["[id]", "disable"],
                                            ),
                                 "_class": "action-btn",
                                 })
+
                 if settings.get_auth_show_link():
                     actions.insert(1, {"label": s3_str(T("Link")),
-                                       "restrict": restrict,
+                                       "exclude": disabled,
                                        "url": URL(c="admin", f="user",
                                                   args = ["[id]", "link"],
                                                   ),

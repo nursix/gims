@@ -37,13 +37,12 @@ import os
 from gluon import current, Field, URL, IS_EMPTY_OR, IS_IN_SET, DIV
 from gluon.storage import Storage
 
-from core import BooleanRepresent, DataModel, S3Duplicate, \
+from core import BooleanRepresent, DataModel, DateField, WorkflowOptions, S3Duplicate, \
                  get_form_record_id, represent_file, represent_option, \
-                 s3_comments, s3_comments_widget, \
-                 s3_date, s3_datetime, s3_meta_fields, \
+                 DateTimeField, CommentsField, s3_comments_widget, \
                  s3_str, s3_text_represent
 
-from ..helpers import WorkflowOptions, PersonRepresentDetails
+from ..helpers import PersonRepresentDetails
 
 DEFAULT = lambda: None
 
@@ -116,6 +115,14 @@ PUBLIC_REASON = WorkflowOptions(("COMMISSION", "Provider not currently commissio
                                 selectable = ("OVERRIDE",),
                                 )
 
+# Audit evidence status
+EVIDENCE_STATUS = WorkflowOptions(("N/R", "Not Required", "grey"),
+                                  ("REQUIRED", "Required", "lightblue"),
+                                  ("REQUESTED", "Requested##demand", "amber"),
+                                  ("COMPLETE", "Complete", "green"),
+                                  represent = "status",
+                                  )
+
 # =============================================================================
 class TestProviderRequirementsModel(DataModel):
     """
@@ -162,13 +169,7 @@ class TestProviderRequirementsModel(DataModel):
                                 default = False,
                                 represent = flag_represent,
                                 ),
-                          # TODO deprecated, retained for migration
-                          Field("minforeq", "boolean",
-                                default = False,
-                                readable = False,
-                                writable = False,
-                                ),
-                          *s3_meta_fields())
+                          )
 
         # Table configuration
         self.configure(tablename,
@@ -184,6 +185,8 @@ class TestProviderModel(DataModel):
 
     names = ("org_verification",
              "org_commission",
+             "org_audit",
+             "org_bsnr",
              )
 
     def model(self):
@@ -256,7 +259,7 @@ class TestProviderModel(DataModel):
                            readable = True,
                            writable = False,
                            ),
-                     *s3_meta_fields())
+                     )
 
         # ---------------------------------------------------------------------
         # Commission
@@ -265,15 +268,16 @@ class TestProviderModel(DataModel):
         tablename = "org_commission"
         define_table(tablename,
                      organisation_id(empty=False),
-                     s3_date(default = "now",
-                             past = 0,
-                             set_min="#org_commission_end_date",
-                             ),
-                     s3_date("end_date",
-                             label = T("Valid until"),
-                             default = None,
-                             set_max="#org_commission_date",
-                             ),
+                     DateField("date",
+                               default = "now",
+                               past = 0,
+                               set_min = "#org_commission_end_date",
+                               ),
+                     DateField("end_date",
+                               label = T("Valid until"),
+                               default = None,
+                               set_max="#org_commission_date",
+                               ),
                      Field("status",
                            label = T("Status"),
                            default = "CURRENT",
@@ -289,17 +293,17 @@ class TestProviderModel(DataModel):
                            readable = False,
                            writable = False,
                            ),
-                     s3_date("status_date",
-                             label = T("Status updated on"),
-                             writable = False,
-                             ),
+                     DateField("status_date",
+                               label = T("Status updated on"),
+                               writable = False,
+                               ),
                      Field("status_reason",
                            label = T("Status Reason"),
                            requires = IS_EMPTY_OR(
                                         IS_IN_SET(COMMISSION_REASON.selectable(True),
                                                   sort = False,
                                                   )),
-                           represent = represent_option(dict(COMMISSION_REASON.labels)),
+                           represent = represent_option(dict(COMMISSION_REASON.labels())),
                            ),
                      Field("cnote", "upload",
                            label = T("Commissioning Note"),
@@ -311,8 +315,8 @@ class TestProviderModel(DataModel):
                            readable = False,
                            writable = False,
                            ),
-                     s3_comments(),
-                     *s3_meta_fields())
+                     CommentsField(),
+                     )
 
         # Table configuration
         configure(tablename,
@@ -337,6 +341,69 @@ class TestProviderModel(DataModel):
             msg_record_deleted = T("Commission deleted"),
             msg_list_empty = T("No Commissions currently registered"),
             )
+
+        # ---------------------------------------------------------------------
+        # Audit
+        #
+        tablename = "org_audit"
+        define_table(tablename,
+                     organisation_id(empty=False),
+                     Field("evidence_status",
+                           label = T("Evidence"),
+                           default = "N/R",
+                           requires = IS_IN_SET(EVIDENCE_STATUS.selectable(),
+                                                zero = None,
+                                                sort = False,
+                                                ),
+                           represent = EVIDENCE_STATUS.represent,
+                           ),
+                     DateField("evidence_due_date",
+                               label = T("Evidence requested by"),
+                               ),
+                     DateField("evidence_complete_date",
+                               label = T("Evidence complete since"),
+                               # Set automatically onaccept:
+                               writable = False,
+                               ),
+                     Field("docs_available", "boolean",
+                           default = False,
+                           label = T("New Documents Available"),
+                           writable = False,
+                           represent = BooleanRepresent(icons = True,
+                                                        colors = True,
+                                                        ),
+                           ),
+                     CommentsField(),
+                     )
+
+        configure(tablename,
+                  onvalidation = self.audit_onvalidation,
+                  onaccept = self.audit_onaccept,
+                  )
+
+        # ---------------------------------------------------------------------
+        # BSNR
+        #
+        tablename = "org_bsnr"
+        define_table(tablename,
+                     organisation_id(empty=False),
+                     Field("bsnr",
+                           label = T("BSNR"),
+                           writable = False,
+                           ),
+                     Field("taxid",
+                           label = T("Tax ID"),
+                           writable = False,
+                           ),
+                     )
+
+        # Table configuration
+        configure(tablename,
+                  deduplicate = S3Duplicate(primary = ("organisation_id",
+                                                       "bsnr",
+                                                       ),
+                                            ),
+                  )
 
     #--------------------------------------------------------------------------
     @staticmethod
@@ -516,6 +583,71 @@ class TestProviderModel(DataModel):
                 current.response.information = \
                     T("Test station notified")
 
+    #--------------------------------------------------------------------------
+    @staticmethod
+    def audit_onvalidation(form):
+        """
+            Onvalidation of org_audit:
+                - make sure the evidence due date is recorded when evidence
+                  has been requested
+        """
+
+        form_vars = form.vars
+
+        evidence_status = form_vars.get("evidence_status")
+        due_date = "evidence_due_date"
+
+        if evidence_status == "REQUESTED" and \
+           due_date in form_vars and not form_vars[due_date]:
+            form.errors[due_date] = current.T("input required")
+
+    #--------------------------------------------------------------------------
+    @staticmethod
+    def audit_onaccept(form):
+        """
+            Onaccept of org_audit:
+                - set complete-date when evidence is marked as complete
+                - remove complete-date when evidence is not marked as complete
+                - remove due-date when no more evidence is pending
+        """
+
+        record_id = get_form_record_id(form)
+        if not record_id:
+            return
+
+        db = current.db
+        s3db = current.s3db
+
+        table = s3db.org_audit
+        record = db(table.id == record_id).select(table.id,
+                                                  table.organisation_id,
+                                                  table.evidence_status,
+                                                  table.evidence_due_date,
+                                                  table.evidence_complete_date,
+                                                  limitby = (0, 1),
+                                                  ).first()
+        if not record:
+            return
+
+        update = {}
+        today = current.request.utcnow.date()
+
+        if record.evidence_status == "COMPLETE":
+            if not record.evidence_complete_date:
+                update["evidence_complete_date"] = today
+        elif record.evidence_complete_date:
+            update["evidence_complete_date"] = None
+
+        if record.evidence_status != "REQUESTED" and \
+           record.evidence_due_date:
+            update["evidence_due_date"] = None
+
+        if update:
+            record.update_record(**update)
+
+        if record.organisation_id:
+            TestProvider(record.organisation_id).update_audit_status()
+
 # =============================================================================
 class TestProviderRepresentativeModel(DataModel):
     """
@@ -564,13 +696,13 @@ class TestProviderRepresentativeModel(DataModel):
                                 represent = BooleanRepresent(icons=True),
                                 writable = False,
                                 ),
-                          s3_date(label = T("Start Date"),
-                                  writable = False,
-                                  ),
-                          s3_date("end_date",
-                                  label = T("End Date"),
-                                  writable = False,
-                                  ),
+                          DateField(label = T("Start Date"),
+                                    writable = False,
+                                    ),
+                          DateField("end_date",
+                                    label = T("End Date"),
+                                    writable = False,
+                                    ),
 
                           # Hidden data hash to detect relevant changes
                           Field("dhash",
@@ -645,12 +777,12 @@ class TestProviderRepresentativeModel(DataModel):
                                 readable = True,
                                 writable = False,
                                 ),
-                          s3_comments(
+                          CommentsField(
                               label = T("Advice"),
                               writable = False,
                               comment = None,
                               ),
-                          *s3_meta_fields())
+                          )
 
         # Table configuration
         self.configure(tablename,
@@ -782,7 +914,7 @@ class TestStationModel(DataModel):
                                                   sort = False,
                                                   zero = None,
                                                   )),
-                           represent = represent_option(dict(PUBLIC_REASON.labels)),
+                           represent = represent_option(dict(PUBLIC_REASON.labels())),
                            readable = True,
                            writable = False,
                            ),
@@ -797,7 +929,7 @@ class TestStationModel(DataModel):
                            readable = False,
                            writable = False,
                            ),
-                     *s3_meta_fields())
+                     )
 
         # Table configuration
         configure(tablename,
@@ -812,7 +944,7 @@ class TestStationModel(DataModel):
         tablename = "org_site_approval_status"
         define_table(tablename,
                      site_id(),
-                     s3_datetime("timestmp", writable=False),
+                     DateTimeField("timestmp", writable=False),
                      Field("status",
                            label = T("Processing Status"),
                            represent = APPROVAL_STATUS.represent,
@@ -842,7 +974,7 @@ class TestStationModel(DataModel):
                            ),
                      Field("public_reason",
                            label = T("Reason for unlisting"),
-                           represent = represent_option(dict(PUBLIC_REASON.labels)),
+                           represent = represent_option(dict(PUBLIC_REASON.labels())),
                            readable = True,
                            writable = False,
                            ),
@@ -851,7 +983,7 @@ class TestStationModel(DataModel):
                            represent = s3_text_represent,
                            writable = False,
                            ),
-                     *s3_meta_fields())
+                     )
 
         # List fields
         list_fields = ["timestmp",
@@ -1204,6 +1336,28 @@ class TestProvider:
         return verification
 
     # -------------------------------------------------------------------------
+    @staticmethod
+    def status(values):
+        """
+            Determines overall verification status from tag values
+
+            Args:
+                values: the tag values
+
+            Returns:
+                the overall verification status
+        """
+
+        if all(v in ("VERIFIED", "ACCEPT") for v in values):
+            status = "COMPLETE"
+        elif any(v == "REVIEW" for v in values):
+            status = "REVIEW"
+        else:
+            status = "REVISE"
+
+        return status
+
+    # -------------------------------------------------------------------------
     def verification_defaults(self):
         """
             Gets defaults for the verification record for this provider
@@ -1222,14 +1376,7 @@ class TestProvider:
 
         reprinfo = self.check_reprinfo() if self.rinforeq else "ACCEPT"
 
-        review = (orgtype, mpav, reprinfo)
-
-        if all(v in ("VERIFIED", "ACCEPT") for v in review):
-            status = "COMPLETE"
-        elif any(v == "REVIEW" for v in review):
-            status = "REVIEW"
-        else:
-            status = "REVISE"
+        status = self.status((orgtype, mpav, reprinfo))
 
         return {"status": status,
                 "orgtype": orgtype,
@@ -1336,31 +1483,40 @@ class TestProvider:
         types = "|".join(str(x) for x in sorted(self.types))
         vhash = get_dhash([types])
 
+        verification = self.verification
+
         # Check the current hash to detect relevant changes
-        if vhash != self.verification.dhash and \
-           not current.auth.s3_has_role("ORG_GROUP_ADMIN"):
-            # Data have changed
-            # => reset verification to type-specific defaults
+        if vhash != verification.dhash:
+            # Relevant data have changed
+
+            # Determine default statuses
             update = self.verification_defaults()
+
+            # Update statuses for manually approved requirements
+            is_org_group_admin = current.auth.s3_has_role("ORG_GROUP_ADMIN")
+            for tag in ("orgtype", "mpav"): # reprinfo determined by own workflow
+                if update[tag] in ("N/A", "ACCEPT", "VERIFIED"):
+                    continue # reset unconditionally
+                current_value = verification[tag]
+                if is_org_group_admin:
+                    if current_value == "ACCEPT":
+                        update[tag] = "REVIEW"
+                    else:
+                        update[tag] = current_value
+                else:
+                    if verification.status == "READY" or current_value == "REVIEW":
+                        update[tag] = "REVIEW"
+                    else:
+                        update[tag] = "REVISE"
+
+            # Determine overall status
+            tags = ("orgtype", "mpav", "reprinfo")
+            update["status"] = self.status(update[t] for t in tags)
             update["dhash"] = vhash
         else:
             update = None
 
         return update, vhash
-
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def reset_all(tags, value="N/A"):
-        """
-            Sets all given workflow tags to initial status
-
-            Args:
-                tags: the tag Rows
-                value: the initial value
-        """
-
-        for tag in tags:
-            tag.update_record(value=value)
 
     # -------------------------------------------------------------------------
     def check_reprinfo(self):
@@ -1428,8 +1584,7 @@ class TestProvider:
                 if orgtype == "ACCEPT":
                     orgtype = "REVIEW"
             else:
-                if orgtype == "REVIEW":
-                    orgtype = "ACCEPT"
+                orgtype = "ACCEPT"
             if orgtype == "REVISE" and status == "READY":
                 orgtype = "REVIEW"
             if orgtype != verification.orgtype:
@@ -1441,8 +1596,7 @@ class TestProvider:
                 if mpav == "ACCEPT":
                     mpav = "REVIEW"
             else:
-                if mpav == "REVIEW":
-                    mpav = "ACCEPT"
+                mpav = "ACCEPT"
             if mpav == "REVISE" and status == "READY":
                 mpav = "REVIEW"
             if mpav != verification.mpav:
@@ -1454,13 +1608,7 @@ class TestProvider:
                 update["reprinfo"] = reprinfo
 
             # Determine overall status
-            review = (orgtype, mpav, reprinfo)
-            if all(v in ("VERIFIED", "ACCEPT") for v in review):
-                status = "COMPLETE"
-            elif any(v == "REVIEW" for v in review):
-                status = "REVIEW"
-            else:
-                status = "REVISE"
+            status = self.status((orgtype, mpav, reprinfo))
             if status != verification.status:
                 update["status"] = status
 
@@ -1686,12 +1834,9 @@ class TestProvider:
             cc = None
 
         # Data for the notification email
+        app_url = current.deployment_settings.get_base_app_url()
         org_data = {"name": self.record.name,
-                    "url": URL(c = "org",
-                               f = "organisation",
-                               args = [organisation_id, "commission"],
-                               host = True,
-                               ),
+                    "url": "%s/org/organisation/%s/commission" % (app_url, organisation_id)
                     }
 
         template = {"CURRENT": "CommissionIssued",
@@ -1702,7 +1847,7 @@ class TestProvider:
         if not template:
             template = "CommissionStatusChanged"
 
-        reason_labels = dict(COMMISSION_REASON.labels)
+        reason_labels = dict(COMMISSION_REASON.labels())
 
         db = current.db
         s3db = current.s3db
@@ -1772,6 +1917,51 @@ class TestProvider:
         return error
 
     # -------------------------------------------------------------------------
+    def add_audit_status(self):
+        """
+            Adds the audit status for this provider, if it doesn't exist
+        """
+
+        table = current.s3db.org_audit
+        organisation_id = self.organisation_id
+
+        query = (table.organisation_id == organisation_id)
+        audit = current.db(query).select(table.id, limitby=(0, 1)).first()
+        if not audit and organisation_id:
+            record_id = table.insert(organisation_id = organisation_id)
+            current.auth.s3_set_record_owner(table, record_id)
+        else:
+            record_id = None
+        return record_id
+
+    # -------------------------------------------------------------------------
+    def update_audit_status(self):
+        """
+            Updates the audit status of the provider:
+                - sets org_audit.docs_available
+        """
+
+        db = current.db
+        s3db = current.s3db
+
+        dtable = s3db.doc_document
+        atable = s3db.org_audit
+
+        organisation_id = self.organisation_id
+
+        query = (dtable.organisation_id == organisation_id) & \
+                (dtable.status == "NEW") & \
+                (dtable.deleted == False)
+        new_documents = db(query).select(dtable.id, limitby=(0, 1)).first()
+
+        query = (atable.organisation_id == organisation_id) & \
+                (atable.deleted == False)
+        db(query).update(docs_available = bool(new_documents),
+                         modified_by = atable.modified_by,
+                         modified_on = atable.modified_on,
+                         )
+
+    # -------------------------------------------------------------------------
     # Configuration helpers
     # -------------------------------------------------------------------------
     @staticmethod
@@ -1784,8 +1974,12 @@ class TestProvider:
                                     org_verification = {"joinby": "organisation_id",
                                                         "multiple": False,
                                                         },
+                                    org_audit = {"joinby": "organisation_id",
+                                                 "multiple": False,
+                                                 },
                                     org_representative = "organisation_id",
                                     org_commission = "organisation_id",
+                                    org_bsnr = "organisation_id",
                                     jnl_issue = "organisation_id",
                                     )
 
@@ -1958,11 +2152,10 @@ class ProviderRepresentative:
     """ Service functions for provider representative verification """
 
     # Data requirements for representatives
-    # - for future activation
-    place_of_birth_required = False
-    email_required = False
-    phone_required = False
-    address_required = False
+    place_of_birth_required = True
+    email_required = True
+    phone_required = True
+    address_required = True
     account_required = False
     role_required = False
 
@@ -3116,12 +3309,10 @@ class TestStation:
             return "No Organisation Administrator found"
 
         # Data for the notification email
+        app_url = current.deployment_settings.get_base_app_url()
         data = {"name": facility.name,
-                "url": URL(c = "org",
-                           f = "organisation",
-                           args = [organisation_id, "facility", facility.id],
-                           host = True,
-                           ),
+                "url": "%s/org/organisation/%s/facility/%s" % \
+                       (app_url, organisation_id, facility.id),
                 }
 
         approval = self.approval
