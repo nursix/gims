@@ -60,9 +60,7 @@ def mrcms_absence(row):
         check_out_date = registration.check_out_date
         if check_out_date:
 
-            delta = (current.request.utcnow - check_out_date).total_seconds()
-            if delta < 0:
-                delta = 0
+            delta = max(0, (current.request.utcnow - check_out_date).total_seconds())
             days = int(delta / 86400)
 
             if days < 1:
@@ -280,7 +278,7 @@ def configure_inline_shelter_registration(component, shelters, person_id=None):
         # Configure shelter ID
         field = rtable.shelter_id
         field.default = default_shelter
-        field.writable = False if default_shelter else True
+        field.writable = not default_shelter
         field.comment = None
         field.widget = None
 
@@ -467,14 +465,18 @@ def configure_case_form(resource,
                 # Other Details ---------------------------
                 "person_details.occupation",
                 S3SQLInlineComponent(
-                        "contact",
+                        "phone",
                         fields = [("", "value")],
-                        filterby = {"field": "contact_method",
-                                    "options": "SMS",
-                                    },
                         label = T("Mobile Phone"),
                         multiple = False,
                         name = "phone",
+                        ),
+                S3SQLInlineComponent(
+                        "email",
+                        fields = [("", "value")],
+                        label = T("Email"),
+                        multiple = False,
+                        name = "email",
                         ),
                 "person_details.literacy",
                 S3SQLInlineComponent(
@@ -532,33 +534,48 @@ def configure_case_form(resource,
 
 # -------------------------------------------------------------------------
 def configure_case_filters(resource, organisation_id=None, privileged=False):
+    """
+        Configure case list filters
+
+        Args:
+            resource: the (pr_person) resource
+            organisation_id: the default case organisation ID
+            privileged: whether the user has a privileged role with
+                        extended access to fields
+    """
 
     T = current.T
 
+    db = current.db
     s3db = current.s3db
 
     from core import AgeFilter, DateFilter, OptionsFilter, TextFilter, get_filter_options
 
+    # Status filter options
     closed = current.request.get_vars.get("closed")
     get_status_opts = s3db.dvr_case_status_filter_opts
     if closed == "only":
         status_opts = lambda: get_status_opts(closed=True)
-    elif closed == "1" or closed == "include":
+    elif closed in {"1", "include"}:
         status_opts = get_status_opts
     else:
         status_opts = lambda: get_status_opts(closed=False)
-
     default_status = s3db.dvr_case_default_status()
 
+    # Text filter fields
+    text_filter_fields = ["pe_label",
+                          "first_name",
+                          "last_name",
+                          "dvr_case.comments",
+                          ]
+    if privileged:
+        text_filter_fields.extend(["dvr_case.reference",
+                                   "shelter_registration.shelter_unit_id$name",
+                                   ])
+
+    # Basic filters
     filter_widgets = [
-            TextFilter(["pe_label",
-                        "first_name",
-                        "last_name",
-                        "dvr_case.reference",
-                        "dvr_case.comments",
-                        # TODO only SHELTER* roles:
-                        "shelter_registration.shelter_unit_id$name",
-                        ],
+            TextFilter(text_filter_fields,
                        label = T("Search"),
                        comment = T("You can search by name, ID or comments"),
                        ),
@@ -586,13 +603,41 @@ def configure_case_filters(resource, organisation_id=None, privileged=False):
                           ),
             ]
 
-    # TODO only ADMIN and ORG_GROUP_ADMIN:
-    if not organisation_id:
+    # Extended filters
+    ptable = s3db.pr_person
+    ctable = s3db.dvr_case
+    otable = s3db.org_organisation
+    stable = s3db.cr_shelter
+    rtable = s3db.cr_shelter_registration
+
+    query = current.auth.s3_accessible_query("read", "pr_person")
+    person_ids = db(query)._select(ptable.id)
+
+    # Organisation filter
+    organisation_ids = db(ctable.person_id.belongs(person_ids))._select(ctable.organisation_id)
+    organisations = db(otable.id.belongs(organisation_ids)).select(otable.id,
+                                                                   otable.name,
+                                                                   )
+    if organisations and len(organisations) > 1:
         filter_widgets.append(
                 OptionsFilter("dvr_case.organisation_id",
+                              options = {o.id: o.name for o in organisations},
                               hidden = True,
                               ))
 
+    # Shelter filter
+    shelter_ids = db(rtable.person_id.belongs(person_ids))._select(rtable.shelter_id)
+    shelters = db(stable.id.belongs(shelter_ids)).select(stable.id,
+                                                         stable.name,
+                                                         )
+    if shelters and len(shelters) > 1:
+        filter_widgets.append(
+                OptionsFilter("cr_shelter_registration.shelter_id",
+                              options = {s.id: s.name for s in shelters},
+                              hidden = True,
+                              ))
+
+    # Additional filters for privileged roles
     if privileged:
         filter_widgets.extend([
                 DateFilter("dvr_case.date",
@@ -844,10 +889,11 @@ def configure_dvr_person_controller(r, privileged=False, administration=False):
                                 )
 
             # Configure case filters
-            configure_case_filters(resource,
-                                   organisation_id = case_organisation,
-                                   privileged = privileged,
-                                   )
+            if not r.record:
+                configure_case_filters(resource,
+                                       organisation_id = case_organisation,
+                                       privileged = privileged,
+                                       )
 
             # Configure case reports
             configure_case_reports(resource)
@@ -885,6 +931,28 @@ def configure_dvr_person_controller(r, privileged=False, administration=False):
                                 editable = False,
                                 deletable = False,
                                 )
+
+    elif r.component.tablename in ("dvr_vulnerability",
+                                   "dvr_case_activity",
+                                   "dvr_response_action",
+                                   ):
+        is_org_admin = current.auth.s3_has_role("ORG_ADMIN")
+
+        # Do not show job title for staff member link
+        represent = s3db.hrm_HumanResourceRepresent(show_link = False,
+                                                    show_title = False,
+                                                    )
+        for tn in ("dvr_vulnerability",
+                   "dvr_case_activity",
+                   "dvr_case_activity_update",
+                   "dvr_response_action",
+                   ):
+            field = s3db[tn].human_resource_id
+            field.readable = True
+            # If there is a default staff member responsible set, only
+            # the OrgAdmin (or Admin) can select someone else:
+            field.writable = is_org_admin if field.default else True
+            field.represent = represent
 
 # -------------------------------------------------------------------------
 def configure_security_person_controller(r):
@@ -1162,6 +1230,8 @@ def pr_person_controller(**attr):
     T = current.T
     auth = current.auth
     s3 = current.response.s3
+
+    current.deployment_settings.base.bigtable = True
 
     is_org_admin = auth.s3_has_role("ORG_ADMIN")
     is_case_admin = auth.s3_has_role("CASE_ADMIN")

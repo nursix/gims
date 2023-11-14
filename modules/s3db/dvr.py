@@ -353,6 +353,8 @@ class DVRCaseModel(DataModel):
                             ),
                      self.hrm_human_resource_id(
                             label = T("Assigned to"),
+                            comment = None,
+                            widget = None,
                             readable = False,
                             writable = False,
                             ),
@@ -1025,8 +1027,21 @@ class DVRCaseFlagModel(DataModel):
         if flags_org_specific:
             list_fields.insert(1, "organisation_id")
 
+        # Filter widgets
+        filter_widgets = [TextFilter(["name",
+                                      "instructions",
+                                      "comments",
+                                      ],
+                                     label = T("Search"),
+                                     ),
+                           OptionsFilter("organisation_id",
+                                         hidden = True,
+                                         ),
+                          ]
+
         # Table configuration
         configure(tablename,
+                  filter_widgets = filter_widgets,
                   list_fields = list_fields,
                   update_realm = True,
                   deduplicate = S3Duplicate(primary = ("name",),
@@ -1433,6 +1448,8 @@ class DVRResponseModel(DataModel):
         configure = self.configure
 
         hierarchical_response_types = settings.get_dvr_response_types_hierarchical()
+
+        themes_per_org = settings.get_dvr_response_themes_org_specific()
         themes_sectors = settings.get_dvr_response_themes_sectors()
         themes_needs = settings.get_dvr_response_themes_needs()
 
@@ -1445,7 +1462,10 @@ class DVRResponseModel(DataModel):
         #
         tablename = "dvr_response_theme"
         define_table(tablename,
-                     self.org_organisation_id(),
+                     self.org_organisation_id(readable = themes_per_org,
+                                              writable = themes_per_org,
+                                              comment = None,
+                                              ),
                      Field("name",
                            label = T("Theme"),
                            requires = [IS_NOT_EMPTY(), IS_LENGTH(512, minsize=1)],
@@ -1612,17 +1632,26 @@ class DVRResponseModel(DataModel):
                      Field("is_default", "boolean",
                            default = False,
                            label = T("Default Initial Status"),
+                           represent = BooleanRepresent(),
                            ),
                      Field("is_closed", "boolean",
                            default = False,
                            label = T("Closes Response Action"),
+                           represent = BooleanRepresent(),
+                           ),
+                     Field("is_canceled", "boolean",
+                           default = False,
+                           label = T("Indicates Cancelation"),
+                           represent = BooleanRepresent(),
                            ),
                      Field("is_default_closure", "boolean",
                            default = False,
                            label = T("Default Closure Status"),
+                           represent = BooleanRepresent(),
                            ),
                      Field("color",
                            requires = IS_HTML_COLOUR(),
+                           represent = IS_HTML_COLOUR.represent,
                            widget = S3ColorPickerWidget(),
                            ),
                      CommentsField(),
@@ -1896,6 +1925,7 @@ class DVRResponseModel(DataModel):
                   filter_widgets = filter_widgets,
                   list_fields = list_fields,
                   onaccept = self.response_action_onaccept,
+                  ondelete = self.response_action_ondelete,
                   orderby = "%s.start_date desc" % tablename,
                   )
 
@@ -1941,6 +1971,8 @@ class DVRResponseModel(DataModel):
                            represent = theme_represent,
                            requires = IS_ONE_OF(db, "dvr_response_theme.id",
                                                 theme_represent,
+                                                not_filterby = "obsolete",
+                                                not_filter_opts = (True,),
                                                 ),
                            ),
                      Field("hours", "double",
@@ -2046,6 +2078,10 @@ class DVRResponseModel(DataModel):
             query = (table.is_default_closure == True) & \
                     (table.id != record_id)
             db(query).update(is_default_closure = False)
+
+        # If this status means canceled, then enforce is_closed
+        if form_vars.get("is_canceled"):
+            db(table.id == record_id).update(is_closed = True)
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -2200,8 +2236,11 @@ class DVRResponseModel(DataModel):
     def response_action_onaccept(cls, form):
         """
             Onaccept routine for response actions
+                - inherit the person ID from case activity if created inline
+                - link to case activity if created on person tab and
+                  configured for autolink
                 - update theme links from inline response_theme_ids
-                - link to case activity if required
+                - update last-seen-on
         """
 
         form_vars = form.vars
@@ -2354,6 +2393,21 @@ class DVRResponseModel(DataModel):
 
         elif end_date:
             record.update_record(end_date = None)
+
+        # Update last-seen-on
+        dvr_update_last_seen(record.person_id)
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def response_action_ondelete(row):
+        """
+            Ondelete of response action:
+                - update last-seen-on
+        """
+
+        person_id = row.person_id
+        if person_id:
+            dvr_update_last_seen(person_id)
 
     # -------------------------------------------------------------------------
     @classmethod
@@ -2790,6 +2844,8 @@ class DVRCaseActivityModel(DataModel):
 
                      # Responsibilities (activate in template as needed)
                      human_resource_id(label = T("Assigned to"),
+                                       comment = None,
+                                       widget = None,
                                        readable = False,
                                        writable = False,
                                        ),
@@ -3022,19 +3078,34 @@ class DVRCaseActivityModel(DataModel):
                   )
 
         # CRUD Strings
-        # TODO re-label as needs if managing response actions
-        crud_strings[tablename] = Storage(
-            label_create = T("Create Activity"),
-            title_display = T("Activity Details"),
-            title_list = T("Activities"),
-            title_update = T("Edit Activity"),
-            label_list_button = T("List Activities"),
-            label_delete_button = T("Delete Activity"),
-            msg_record_created = T("Activity added"),
-            msg_record_modified = T("Activity updated"),
-            msg_record_deleted = T("Activity deleted"),
-            msg_list_empty = T("No Activities currently registered"),
-            )
+        if settings.get_dvr_manage_response_actions():
+            # Case activities represent needs, responses are separate
+            crud_strings[tablename] = Storage(
+                label_create = T("Add Need"),
+                title_display = T("Need Details"),
+                title_list = T("Needs"),
+                title_update = T("Edit Need"),
+                label_list_button = T("List Needs"),
+                label_delete_button = T("Delete Need"),
+                msg_record_created = T("Need added"),
+                msg_record_modified = T("Need updated"),
+                msg_record_deleted = T("Need deleted"),
+                msg_list_empty = T("No Needs currently registered"),
+                )
+        else:
+            # Case activites represent both needs and responses
+            crud_strings[tablename] = Storage(
+                label_create = T("Create Activity"),
+                title_display = T("Activity Details"),
+                title_list = T("Activities"),
+                title_update = T("Edit Activity"),
+                label_list_button = T("List Activities"),
+                label_delete_button = T("Delete Activity"),
+                msg_record_created = T("Activity added"),
+                msg_record_modified = T("Activity updated"),
+                msg_record_deleted = T("Activity deleted"),
+                msg_list_empty = T("No Activities currently registered"),
+                )
 
         # Reusable field
         represent = dvr_CaseActivityRepresent(show_link=True)
@@ -3315,6 +3386,7 @@ class DVRCaseEffortModel(DataModel):
                            ),
                      self.hrm_human_resource_id(
                          comment = None,
+                         widget = None,
                          ),
                      Field("hours", "double",
                            represent = lambda v: \
@@ -3505,8 +3577,20 @@ class DVRCaseAppointmentModel(DataModel):
                      CommentsField(),
                      )
 
+        # Filter widgets
+        filter_widgets = [TextFilter(["name",
+                                      "comments",
+                                      ],
+                                     label = T("Search"),
+                                     ),
+                           OptionsFilter("organisation_id",
+                                         hidden = True,
+                                         ),
+                          ]
+
         # Table configuration
         configure(tablename,
+                  filter_widgets = filter_widgets,
                   update_realm = True,
                   deduplicate = S3Duplicate(primary = ("name",),
                                             secondary = ("organisation_id",),
@@ -3574,8 +3658,10 @@ class DVRCaseAppointmentModel(DataModel):
                      DateField(label = T("Planned on"),
                                ),
                      # Activate in template as needed:
-                     self.hrm_human_resource_id(readable=False,
-                                                writable=False,
+                     self.hrm_human_resource_id(comment = None,
+                                                widget = None,
+                                                readable = False,
+                                                writable = False,
                                                 ),
                      Field("status", "integer",
                            default = 1, # Planning
@@ -4211,6 +4297,13 @@ class DVRCaseEventModel(DataModel):
         event_types_org_specific = settings.get_dvr_case_event_types_org_specific()
         close_appointments = settings.get_dvr_case_events_close_appointments()
 
+        event_classes = {"A": T("Administrative"),
+                         "C": T("Checkpoint"),
+                         #"D": T("NFI Distribution"),
+                         "F": T("Food Distribution"),
+                         #"P": T("Payment"),
+                         }
+
         tablename = "dvr_case_event_type"
         define_table(tablename,
                      self.org_organisation_id(
@@ -4218,13 +4311,20 @@ class DVRCaseEventModel(DataModel):
                          readble = event_types_org_specific,
                          writable = event_types_org_specific,
                          ),
-                     # TODO Deprecate? (replace by event class)
-                     Field("code", length=64, # notnull=True, unique=True,
+                     Field("event_class",
+                           label = T("Event Class"),
+                           default = "C",
+                           requires = IS_IN_SET(event_classes, zero=None),
+                           represent = represent_option(event_classes),
+                           ),
+                     Field("code", length=64,
                            label = T("Code"),
                            requires = [IS_NOT_EMPTY(),
                                        IS_LENGTH(64, minsize=1),
+                                       # uniqueness only required within organisation
                                        #IS_NOT_ONE_OF(db, "dvr_case_event_type.code"),
                                        ],
+                           comment = T("A unique code for this event type"),
                            ),
                      Field("name",
                            label = T("Name"),
@@ -4233,22 +4333,28 @@ class DVRCaseEventModel(DataModel):
                      Field("is_inactive", "boolean",
                            default = False,
                            label = T("Inactive"),
-                           represent = s3_yes_no_represent,
-                           comment = DIV(_class = "tooltip",
-                                         _title = "%s|%s" % (T("Inactive"),
-                                                             T("This event type can not currently be registered"),
-                                                             ),
-                                         ),
+                           represent = BooleanRepresent(icons = (BooleanRepresent.NEG,
+                                                                 BooleanRepresent.POS,
+                                                                 ),
+                                                        labels = False,
+                                                        flag = True,
+                                                        ),
+                           comment = T("This event type can not currently be registered"),
                            ),
                      Field("is_default", "boolean",
                            default = False,
                            label = T("Default Event Type"),
-                           represent = s3_yes_no_represent,
-                           comment = DIV(_class = "tooltip",
-                                         _title = "%s|%s" % (T("Default Event Type"),
-                                                             T("Assume this event type if no type was specified for an event"),
-                                                             ),
-                                         ),
+                           represent = BooleanRepresent(icons = True,
+                                                        labels = False,
+                                                        flag = True,
+                                                        ),
+                           comment = T("Assume this event type if no type was specified for an event"),
+                           ),
+                     Field("register_multiple", "boolean",
+                           label = T("Allow registration for family members"),
+                           default = False,
+                           represent = BooleanRepresent(icons=True, colors=True),
+                           comment = T("Allow registration of the same event for multiple family members with a single ID"),
                            ),
                      Field("role_required", "reference %s" % role_table,
                            label = T("User Role Required"),
@@ -4258,50 +4364,30 @@ class DVRCaseEventModel(DataModel):
                                                             "%s.id" % role_table,
                                                             role_represent,
                                                             )),
-                           comment = DIV(_class = "tooltip",
-                                         _title = "%s|%s" % (T("User Role Required"),
-                                                             T("User role required to register events of this type"),
-                                                             ),
-                                         ),
+                           comment = T("User role required to register events of this type"),
                            ),
                      self.dvr_appointment_type_id(
-                        "appointment_type_id",
-                        label = T("Appointment Type"),
-                        readable = close_appointments,
-                        writable = close_appointments,
-                        comment = DIV(_class = "tooltip",
-                                      _title = "%s|%s" % (T("Appointment Type"),
-                                                          T("The type of appointments which are completed with this type of event"),
-                                                          ),
-                                      ),
-                        ),
+                            "appointment_type_id",
+                            label = T("Appointment Type"),
+                            readable = close_appointments,
+                            writable = close_appointments,
+                            comment = T("The type of appointments which are completed with this type of event"),
+                            ),
                      Field("min_interval", "double",
                            label = T("Minimum Interval (Hours)"),
-                           comment = DIV(_class = "tooltip",
-                                         _title = "%s|%s" % (T("Minimum Interval (Hours)"),
-                                                             T("Minimum interval between two consecutive registrations of this event type for the same person"),
-                                                             ),
-                                         ),
+                           comment = T("Minimum interval between two consecutive registrations of this event type for the same person"),
                            requires = IS_EMPTY_OR(IS_FLOAT_IN_RANGE(0.0, None)),
                            ),
                      Field("max_per_day", "integer",
                            label = T("Maximum Number per Day"),
-                           comment = DIV(_class = "tooltip",
-                                         _title = "%s|%s" % (T("Maximum Number per Day"),
-                                                             T("Maximum number of occurences of this event type for the same person on the same day"),
-                                                             ),
-                                         ),
+                           comment = T("Maximum number of occurences of this event type for the same person on the same day"),
                            requires = IS_EMPTY_OR(IS_INT_IN_RANGE(0, None)),
                            ),
                      Field("presence_required", "boolean",
                            default = True,
                            label = T("Presence required"),
                            represent = s3_yes_no_represent,
-                           comment = DIV(_class = "tooltip",
-                                         _title = "%s|%s" % (T("Presence required"),
-                                                             T("This event type requires the presence of the person concerned"),
-                                                             ),
-                                         ),
+                           comment = T("This event type requires the presence of the person concerned"),
                            ),
                      CommentsField(),
                      )
@@ -4315,12 +4401,30 @@ class DVRCaseEventModel(DataModel):
                                               },
                             )
 
+        # Filter widgets
+        filter_widgets = [TextFilter(["name",
+                                      "code",
+                                      "comments",
+                                      ],
+                                     label = T("Search"),
+                                     ),
+                           OptionsFilter("event_class",
+                                         options = event_classes,
+                                         hidden = True,
+                                         ),
+                           OptionsFilter("organisation_id",
+                                         hidden = True,
+                                         ),
+                          ]
+
         # Table Configuration
         configure(tablename,
                   deduplicate = S3Duplicate(primary = ("code", "name"),
                                             secondary = ("organisation_id",),
                                             ignore_deleted = True,
                                             ),
+                  filter_widgets = filter_widgets,
+                  onvalidation = self.case_event_type_onvalidation,
                   onaccept = self.case_event_type_onaccept,
                   )
 
@@ -4480,7 +4584,7 @@ class DVRCaseEventModel(DataModel):
         # Custom method for event registration
         self.set_method("dvr_case_event",
                         method = "register",
-                        action = DVRRegisterCaseEvent,
+                        action = Checkpoint,
                         )
 
         # ---------------------------------------------------------------------
@@ -4494,6 +4598,44 @@ class DVRCaseEventModel(DataModel):
         """ Safe defaults for names in case the module is disabled """
 
         return None
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def case_event_type_onvalidation(form):
+        """
+            Form validation of case event types
+                - code must be unique (within the organisation)
+                - multiple-registration excluded when presence required
+
+            Args:
+                form: the FORM
+        """
+
+        T = current.T
+
+        table = current.s3db.dvr_case_event_type
+        data = get_form_record_data(form, table, ["code",
+                                                  "organisation_id",
+                                                  "register_multiple",
+                                                  "presence_required",
+                                                  ])
+        code = data.get("code")
+        if code:
+            # Check that code is unique for the organisation
+            query = (table.code == code) & \
+                    (table.organisation_id == data.get("organisation_id")) & \
+                    (table.deleted == False)
+            record_id = get_form_record_id(form)
+            if record_id:
+                query &= (table.id != record_id)
+            if current.db(query).select(table.id, limitby=(0, 1)).first():
+                form.errors.code = T("Code must be unique")
+
+        presence_required = data.get("presence_required")
+        register_multiple = data.get("register_multiple")
+        if presence_required and register_multiple:
+            msg = T("Presence required excludes multiple-registration")
+            form.errors.register_multiple = msg
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -4875,6 +5017,8 @@ class DVRVulnerabilityModel(DataModel):
                      # Enable in template as-required:
                      self.hrm_human_resource_id(
                          label = T("Established by"),
+                         comment = None,
+                         widget = None,
                          readable = False,
                          writable = False,
                          ),
@@ -5133,9 +5277,8 @@ class DVRServiceContactModel(DataModel):
                   )
 
         # CRUD Strings
-        ADD_TYPE = T("Create Service Contact Type")
         crud_strings[tablename] = Storage(
-            label_create = ADD_TYPE,
+            label_create = T("Create Service Contact Type"),
             title_display = T("Service Contact Type"),
             title_list = T("Service Contact Types"),
             title_update = T("Edit Service Contact Types"),
@@ -5205,7 +5348,7 @@ class DVRServiceContactModel(DataModel):
 
         # CRUD Strings
         crud_strings[tablename] = Storage(
-            label_create = T("Create Service Contact"),
+            label_create = T("Add Service Contact"),
             title_display = T("Service Contact Details"),
             title_list = T("Service Contacts"),
             title_update = T("Edit Service Contacts"),
@@ -5378,6 +5521,7 @@ def dvr_case_organisation(person_id):
     rows = db(query).select(ctable.id,
                             ctable.organisation_id,
                             stable.is_closed,
+                            left = left,
                             orderby = ~ctable.date,
                             )
     case = None
@@ -5594,7 +5738,13 @@ def dvr_case_activity_form(r):
     if settings.get_dvr_manage_response_actions():
         actions.append(s3db.dvr_configure_inline_responses(r))
     actions.append("activity_details")
+
+    # Inline Updates
     if settings.get_dvr_case_activity_updates():
+        # When using updates, need details describe initial situation
+        table = s3db.dvr_case_activity
+        field = table.need_details
+        field.label = T("Initial Situation Details")
 
         # Set default for human_resource_id
         utable = s3db.dvr_case_activity_update
@@ -5644,6 +5794,9 @@ def dvr_case_activity_form(r):
         documents = []
 
     crud_fields += need  + actions + followup + categories+ status + documents
+
+    if settings.get_dvr_case_activity_comments():
+        crud_fields.append("comments")
 
     return S3SQLCustomForm(*crud_fields)
 
@@ -9168,7 +9321,7 @@ class DVRRegisterPayment(DVRRegisterCaseEvent):
         return output
 
 # =============================================================================
-def dvr_get_flag_instructions(person_id, action=None):
+def dvr_get_flag_instructions(person_id, action=None, organisation_id=None):
     """
         Get handling instructions if flags are set for a person
 
@@ -9176,6 +9329,7 @@ def dvr_get_flag_instructions(person_id, action=None):
             person_id: the person ID
             action: the action for which instructions are needed:
                     - check-in|check-out|payment|id-check
+            organisation_id: check for flags of this organisation
 
         Returns:
             dict {"permitted": whether the action is permitted
@@ -9187,10 +9341,14 @@ def dvr_get_flag_instructions(person_id, action=None):
 
     ftable = s3db.dvr_case_flag
     ltable = s3db.dvr_case_flag_case
-    query = (ltable.person_id == person_id) & \
-            (ltable.deleted != True) & \
-            (ftable.id == ltable.flag_id) & \
-            (ftable.deleted != True)
+
+    join = ltable.on((ltable.flag_id == ftable.id) & \
+                     (ltable.person_id == person_id) & \
+                     (ltable.deleted == False))
+
+    if not current.deployment_settings.get_dvr_case_flags_org_specific():
+        organisation_id = None
+    query = (ftable.organisation_id == organisation_id)
 
     if action == "check-in":
         query &= (ftable.advise_at_check_in == True) | \
@@ -9203,6 +9361,7 @@ def dvr_get_flag_instructions(person_id, action=None):
                  (ftable.allowance_suspended == True)
     else:
         query &= (ftable.advise_at_id_check == True)
+    query &= (ftable.deleted == False)
 
     flags = current.db(query).select(ftable.name,
                                      ftable.deny_check_in,
@@ -9212,6 +9371,7 @@ def dvr_get_flag_instructions(person_id, action=None):
                                      ftable.advise_at_check_out,
                                      ftable.advise_at_id_check,
                                      ftable.instructions,
+                                     join = join,
                                      )
 
     info = []
@@ -9255,6 +9415,7 @@ def dvr_update_last_seen(person_id):
 
     db = current.db
     s3db = current.s3db
+    settings = current.deployment_settings
 
     now = current.request.utcnow
     last_seen_on = None
@@ -9283,6 +9444,29 @@ def dvr_update_last_seen(person_id):
     if event:
         last_seen_on = event.date
 
+    if settings.get_dvr_response_types() and settings.get_dvr_response_use_time():
+        # Check consultations for newer entries
+        rtable = s3db.dvr_response_action
+        ttable = s3db.dvr_response_type
+        stable = s3db.dvr_response_status
+        join = [ttable.on((ttable.id == rtable.response_type_id) & \
+                          (ttable.is_consultation == True)),
+                stable.on((stable.id == rtable.status_id) & \
+                          (stable.is_closed == True) & \
+                          (stable.is_canceled == False))
+                ]
+        query = (rtable.person_id == person_id) & \
+                (rtable.deleted == False)
+        if last_seen_on is not None:
+            query &= rtable.start_date > last_seen_on
+        entry = db(query).select(rtable.start_date,
+                                 join = join,
+                                 limitby = (0, 1),
+                                 orderby = ~rtable.start_date,
+                                 ).first()
+        if entry:
+            last_seen_on = entry.start_date
+
     # Check site presence events for newer entries
     etable = s3db.org_site_presence_event
     query = (etable.person_id == person_id) & \
@@ -9297,8 +9481,6 @@ def dvr_update_last_seen(person_id):
                              ).first()
     if entry:
         last_seen_on = entry.date
-
-    settings = current.deployment_settings
 
     # Case appointments to update last_seen_on?
     if settings.get_dvr_appointments_update_last_seen_on():

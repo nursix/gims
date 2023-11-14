@@ -8,12 +8,12 @@ import datetime
 
 from dateutil import tz
 
-from gluon import current, URL, A, INPUT, SQLFORM, TAG
+from gluon import current, URL, A, INPUT, SQLFORM, TAG, IS_EMPTY_OR
 from gluon.storage import Storage
 
 from s3dal import Field
 from core import CRUDMethod, CRUDRequest, CustomController, FS, IS_ONE_OF, \
-                 S3PermissionError, S3DateTime, S3SQLCustomForm, \
+                 S3PermissionError, S3DateTime, S3SQLCustomForm, S3SQLInlineLink, \
                  DateFilter, OptionsFilter, TextFilter, \
                  get_form_record_id, s3_fieldmethod, s3_redirect_default, \
                  set_default_filter, set_last_record_id, s3_fullname, s3_str
@@ -188,21 +188,15 @@ def dvr_note_resource(r, tablename):
 # -------------------------------------------------------------------------
 def dvr_case_activity_resource(r, tablename):
 
-    # CRUD Strings
-    # TODO this should happen by default when managing responses
     T = current.T
-    current.response.s3.crud_strings["dvr_case_activity"] = Storage(
-        label_create = T("Add Need"),
-        title_display = T("Need Details"),
-        title_list = T("Needs"),
-        title_update = T("Edit Need"),
-        label_list_button = T("List Needs"),
-        label_delete_button = T("Delete Need"),
-        msg_record_created = T("Need added"),
-        msg_record_modified = T("Need updated"),
-        msg_record_deleted = T("Need deleted"),
-        msg_list_empty = T("No Needs currently registered"),
-        )
+
+    table = current.s3db.dvr_case_activity
+
+    # Set default human_resource_id, alter label
+    field = table.human_resource_id
+    field.default = current.auth.s3_logged_in_human_resource()
+    field.label = T("Registered by")
+    field.widget = None # use standard drop-down
 
 # -------------------------------------------------------------------------
 def dvr_case_activity_controller(**attr):
@@ -210,6 +204,8 @@ def dvr_case_activity_controller(**attr):
     T = current.T
     s3db = current.s3db
     s3 = current.response.s3
+
+    current.deployment_settings.base.bigtable = True
 
     # Custom prep
     standard_prep = s3.prep
@@ -320,6 +316,8 @@ def dvr_case_appointment_controller(**attr):
     auth = current.auth
 
     s3 = current.response.s3
+
+    current.deployment_settings.base.bigtable = True
 
     # Custom prep
     standard_prep = s3.prep
@@ -512,10 +510,10 @@ def dvr_case_event_resource(r, tablename):
 
     s3db = current.s3db
 
-    from ..food import MRCMSRegisterFoodEvent
+    from ..food import FoodDistribution
     s3db.set_method("dvr_case_event",
                     method = "register_food",
-                    action = MRCMSRegisterFoodEvent,
+                    action = FoodDistribution,
                     )
 
     #s3db.add_custom_callback("dvr_case_event",
@@ -679,27 +677,97 @@ def dvr_case_appointment_type_controller(**attr):
 # -------------------------------------------------------------------------
 def dvr_case_event_type_resource(r, tablename):
 
+    T = current.T
+
     s3db = current.s3db
 
+    # TODO filter case event exclusion to types of same org
+    #      if we have a r.record, otherwise OptionsFilterS3?
+
     crud_form = S3SQLCustomForm("organisation_id",
+                                "event_class",
                                 "code",
                                 "name",
                                 "is_inactive",
                                 "is_default",
+                                "register_multiple",
                                 "role_required",
                                 "appointment_type_id",
                                 "min_interval",
                                 "max_per_day",
-                                #S3SQLInlineLink("excluded_by",
-                                #                field = "excluded_by_id",
-                                #                label = current.T("Not Combinable With"),
-                                #                ),
+                                S3SQLInlineLink("excluded_by",
+                                                field = "excluded_by_id",
+                                                label = T("Not Combinable With"),
+                                                comment = T("Events that exclude registration of this event type on the same day"),
+                                                ),
                                 "presence_required",
                                 )
 
     s3db.configure("dvr_case_event_type",
                    crud_form = crud_form,
                    )
+
+# -------------------------------------------------------------------------
+def dvr_case_event_type_controller(**attr):
+
+    T = current.T
+
+    db = current.db
+    auth = current.auth
+
+    s3 = current.response.s3
+
+    # Selectable organisation
+    attr["csv_extra_fields"] = [{"label": "Organisation",
+                                 "field": managed_orgs_field(),
+                                 }]
+
+    standard_prep = s3.prep
+    def prep(r):
+        result = standard_prep(r) if callable(standard_prep) else True
+
+        resource = r.resource
+        table = resource.table
+
+        # Restrict role_required to managed roles
+        from core import S3RoleManager
+        managed_roles = S3RoleManager.get_managed_roles(auth.user.id)
+        roles = {k for k, v in managed_roles.items() if v["a"]}
+
+        rtable = auth.settings.table_group
+        dbset = db(rtable.id.belongs(roles))
+
+        field = table.role_required
+        field.requires = IS_EMPTY_OR(IS_ONE_OF(dbset, "%s.id" % rtable,
+                                               field.represent,
+                                               ))
+        return result
+    s3.prep = prep
+
+    # Custom postp
+    standard_postp = s3.postp
+    def postp(r, output):
+        # Call standard postp
+        if callable(standard_postp):
+            output = standard_postp(r, output)
+
+        # Import-button
+        if not r.record and not r.method and auth.s3_has_permission("create", "dvr_case_event_type"):
+            if isinstance(output, dict):
+                import_btn = A(T("Import"),
+                               _href = r.url(method="import"),
+                               _class = "action-btn activity button",
+                               )
+                showadd_btn = output.get("showadd_btn")
+                if showadd_btn:
+                    output["showadd_btn"] = TAG[""](import_btn, showadd_btn)
+                else:
+                    output["showadd_btn"] = import_btn
+
+        return output
+    s3.postp = postp
+
+    return attr
 
 # -------------------------------------------------------------------------
 def dvr_case_flag_controller(**attr):
@@ -738,6 +806,24 @@ def dvr_case_flag_controller(**attr):
     s3.postp = postp
 
     return attr
+
+# -------------------------------------------------------------------------
+def dvr_service_contact_resource(r, tablename):
+
+    T = current.T
+    s3db = current.s3db
+
+    table = s3db.dvr_service_contact
+
+    field = table.type_id
+    field.label = T("Type")
+
+    field = table.organisation_id
+    field.readable = field.writable = False
+
+    field = table.organisation
+    field.label = T("Organization")
+    field.readable = field.writable = True
 
 # -------------------------------------------------------------------------
 def dvr_site_activity_resource(r, tablename):
@@ -819,7 +905,7 @@ def dvr_person_prep(r):
             # Show only closed cases
             CASES = CLOSED
             query &= FS("dvr_case.status_id$is_closed") == True
-        elif closed != "1" and closed != "include":
+        elif closed not in {"1", "include"}:
             # Show only open cases (default)
             CASES = CURRENT
             query &= (FS("dvr_case.status_id$is_closed") == False) | \
@@ -925,6 +1011,10 @@ def dvr_person_prep(r):
 
             # Limit vulnerabilities by case organisation sectors
             s3db.dvr_configure_vulnerability_types(organisation_id)
+
+            # Set default human_resource_id
+            field = component.table.human_resource_id
+            field.default = current.auth.s3_logged_in_human_resource()
 
     return True
 
