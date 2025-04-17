@@ -4,9 +4,15 @@
     License: MIT
 """
 
-from gluon import current, URL, A
+import datetime
 
-from core import FS, S3DateTime, WorkflowOptions, s3_fullname, s3_str
+from dateutil.relativedelta import relativedelta
+
+from gluon import current, URL, \
+                  A, DIV, I, LABEL, OPTION, SELECT, SPAN, TAG
+
+from s3dal import Field
+from core import FS, IS_ONE_OF, WorkflowOptions, RangeFilter, s3_fullname
 
 # =============================================================================
 def get_role_realms(role):
@@ -133,6 +139,35 @@ def get_role_emails(role_uid, pe_id=None, organisation_id=None):
     return contacts if contacts else None
 
 # -----------------------------------------------------------------------------
+def permitted_orgs(permission, tablename):
+    """
+        Get the IDs of the organisations for which the user has
+        a certain permission for a certain table
+
+        Args:
+            permission: the permission name
+            tablename: the table name
+
+        Returns:
+            List of organisation IDs
+    """
+
+    db = current.db
+    s3db = current.s3db
+    auth = current.auth
+
+    permissions = auth.permission
+    permitted_realms = permissions.permitted_realms(tablename, permission)
+
+    otable = s3db.org_organisation
+    query = (otable.deleted == False)
+    if permitted_realms is not None:
+        query = (otable.pe_id.belongs(permitted_realms)) & query
+    orgs = db(query).select(otable.id)
+
+    return [o.id for o in orgs]
+
+# -----------------------------------------------------------------------------
 def get_managed_orgs(role="ORG_ADMIN", group=None, cacheable=True):
     """
         Get organisations managed by the current user
@@ -174,6 +209,33 @@ def get_managed_orgs(role="ORG_ADMIN", group=None, cacheable=True):
                                     join = join,
                                     )
     return [o.id for o in orgs]
+
+# -------------------------------------------------------------------------
+def managed_orgs_field():
+    """
+        Returns a Field with an organisation selector, to be used
+        for imports of organisation-specific types
+    """
+
+    db = current.db
+    s3db = current.s3db
+    auth = current.auth
+
+    if auth.s3_has_role("ADMIN"):
+        dbset = db
+    else:
+        managed_orgs = []
+        for role in ("ORG_GROUP_ADMIN", "ORG_ADMIN"):
+            if auth.s3_has_role(role):
+                managed_orgs = get_managed_orgs(role=role)
+        otable = s3db.org_organisation
+        dbset = db(otable.id.belongs(managed_orgs))
+
+    field = Field("organisation_id", "reference org_organisation",
+                  requires = IS_ONE_OF(dbset, "org_organisation.id", "%(name)s"),
+                  represent = s3db.org_OrganisationRepresent(),
+                  )
+    return field
 
 # =============================================================================
 def get_user_orgs(roles=None, cacheable=True, limit=None):
@@ -314,9 +376,6 @@ def get_default_shelter():
         Returns:
             shelter ID
     """
-    # TODO refactor
-    #      - use default organisation instead of user orgs (i.e. no default
-    #        shelter without default organisation)
 
     auth = current.auth
     if not auth.s3_logged_in() or auth.s3_has_role("ADMIN"):
@@ -337,6 +396,32 @@ def get_default_shelter():
     return shelter_id
 
 # =============================================================================
+def get_case_organisations(permission="read"):
+    """
+        Checks if the user has access to cases of more than one org
+
+        Args:
+            permission: the required permission for access
+
+        Returns:
+            tuple (multiple_orgs, org_ids)
+    """
+
+    realms = current.auth.permission.permitted_realms("dvr_case", permission)
+    if realms is None:
+        multiple_orgs = True
+        org_ids = []
+    else:
+        otable = current.s3db.org_organisation
+        query = (otable.pe_id.belongs(realms)) & \
+                (otable.deleted == False)
+        rows = current.db(query).select(otable.id)
+        multiple_orgs = len(rows) > 1
+        org_ids = [row.id for row in rows]
+
+    return multiple_orgs, org_ids
+
+# =============================================================================
 def get_default_case_organisation():
     """
         The organisation the user can access case files for (if only one
@@ -345,33 +430,20 @@ def get_default_case_organisation():
         Returns:
             organisation ID
     """
-    # TODO parametrize permission
 
     auth = current.auth
     if not auth.s3_logged_in() or auth.s3_has_role("ADMIN"):
         return None
 
-    permissions = auth.permission
-    permitted_realms = permissions.permitted_realms("dvr_case", "read")
-
-    db = current.db
-    s3db = current.s3db
-
-    table = s3db.org_organisation
-    query = (table.pe_id.belongs(permitted_realms)) & \
-            (table.deleted == False)
-    rows = db(query).select(table.id)
-    if not rows:
+    organisation_ids = permitted_orgs("read", "dvr_case")
+    if not organisation_ids:
         return None
-    if len(rows) == 1:
-        return rows.first().id
+    if len(organisation_ids) == 1:
+        return organisation_ids[0]
 
-    # TODO remove this fallback?
     site_org = get_current_site_organisation()
-    if site_org:
-        organisation_ids = [row.id for row in rows]
-        if site_org in organisation_ids:
-            return site_org
+    if site_org and site_org in organisation_ids:
+        return site_org
 
     return None
 
@@ -470,6 +542,69 @@ def get_default_case_shelter(person_id):
     return shelter_id, unit_id
 
 # =============================================================================
+def get_response_theme_sectors():
+    """
+        Looks up the sectors of all organisations the user can access
+        response actions for; for sector-filter in response action
+        perspective
+
+        Returns:
+            a dict {sector_id: sector_name}
+    """
+
+    T = current.T
+
+    db = current.db
+    s3db = current.s3db
+    auth = current.auth
+
+    stable = s3db.org_sector
+    ltable = s3db.org_sector_organisation
+    otable = s3db.org_organisation
+
+    realms = auth.permission.permitted_realms("dvr_response_action", "read")
+    if realms:
+        query = (otable.pe_id.belongs(realms)) & \
+                (otable.deleted == False)
+        organisation_ids = db(query)._select(otable.id)
+        join = ltable.on((ltable.sector_id == stable.id) & \
+                         (ltable.organisation_id.belongs(organisation_ids)) & \
+                         (ltable.deleted == False))
+    else:
+        join = None
+
+    sectors = db(stable.deleted == False).select(stable.id,
+                                                 stable.name,
+                                                 join = join,
+                                                 )
+    return {s.id: T(s.name) for s in sectors}
+
+# =============================================================================
+def inject_button(output, button, before="add_btn", alt="showadd_btn"):
+    """
+        Injects an additional action button into a CRUD view
+
+        Args:
+            output: the output dict
+            button: the button to inject
+            before: the output["buttons"] element to inject the button
+            alt: output element that overrides "before" if it is present
+    """
+
+    buttons = output.get("buttons")
+    btn = buttons.get(before) if buttons else None
+
+    alt_btn = output.get(alt) if alt else None
+    if alt_btn:
+        output[alt] = TAG[""](button, alt_btn) if alt_btn else button
+    else:
+        if not buttons:
+            buttons = output["buttons"] = {}
+        buttons[before] = TAG[""](button, btn) if btn else button
+
+# =============================================================================
+# Helpers for HRM rheader
+# =============================================================================
 def account_status(record, represent=True):
     """
         Checks the status of the user account for a person
@@ -494,7 +629,7 @@ def account_status(record, represent=True):
 
     account = db(query).select(utable.id,
                                utable.registration_key,
-                               cache = s3db.cache,
+                               #cache = s3db.cache,
                                limitby = (0, 1),
                                ).first()
 
@@ -552,8 +687,8 @@ def hr_details(record):
         human_resource = None
     elif len(rows) > 1:
         rrows = rows
-        rrows = rrows.filter(lambda row: row.status == 1) or rrows
-        rrows = rrows.filter(lambda row: row.org_contact) or rrows
+        rrows = rrows.find(lambda row: row.status == 1) or rrows
+        rrows = rrows.find(lambda row: row.org_contact) or rrows
         human_resource = rrows.first()
     else:
         human_resource = rows.first()
@@ -580,434 +715,341 @@ def hr_details(record):
     return output
 
 # =============================================================================
-class MRCMSSiteActivityReport:
+def user_mailmerge_fields(resource, record):
     """
-        Helper class to produce site activity reports ("Residents Report")
+        Lookup mailmerge-data about the current user
+
+        Args:
+            resource: the context resource (pr_person)
+            record: the context record (beneficiary)
     """
 
-    def __init__(self, site_id=None, date=None):
-        """
-            Args:
-                site_id: the site ID (defaults to default site)
-                date: the date of the report (defaults to today)
-        """
+    user = current.auth.user
+    if not user:
+        return {}
 
-        if site_id is None:
-            site_id = current.deployment_settings.get_org_default_site()
-        self.site_id = site_id
+    fname = user.first_name
+    lname = user.last_name
 
-        if date is None:
-            date = current.request.utcnow.date()
-        self.date = date
+    data = {"Unterschrift": " ".join(n for n in (fname, lname) if n)
+            }
+    if fname:
+        data["Vorname"] = fname
+    if lname:
+        data["Nachname"] = lname
+
+    db = current.db
+    s3db = current.s3db
+
+    # Look up the user organisation
+    otable = s3db.org_organisation
+    query = (otable.id == user.organisation_id)
+    org = db(query).select(otable.id,
+                           otable.name,
+                           limitby = (0, 1),
+                           ).first()
+    if org:
+        data["Organisation"] = org.name
+
+        # Look up the team the user belongs to
+        ltable = s3db.org_organisation_team
+        gtable = s3db.pr_group
+        mtable = s3db.pr_group_membership
+        ptable = s3db.pr_person
+        join = [gtable.on(gtable.id == ltable.group_id),
+                mtable.on((mtable.group_id == gtable.id) & (mtable.deleted == False)),
+                ptable.on(ptable.id == mtable.person_id),
+                ]
+        query = (ltable.organisation_id == org.id) & \
+                (ltable.deleted == False) & \
+                (ptable.pe_id == user.pe_id)
+        row = db(query).select(gtable.name,
+                               join = join,
+                               limitby = (0, 1),
+                               orderby = ~(mtable.modified_on),
+                               ).first()
+        if row:
+            data["Team"] = row.name
+
+    # Look up contact information
+    ctable = s3db.pr_contact
+    query = (ctable.pe_id == user.pe_id) & \
+            (ctable.contact_method == "EMAIL") & \
+            (ctable.deleted == False)
+    row = db(query).select(ctable.value,
+                           limitby = (0, 1),
+                           orderby = (ctable.priority, ~(ctable.modified_on)),
+                           ).first()
+    if row:
+        data["Email"] = row.value
+
+    priority = {"SMS": 1, "WORK_PHONE": 2, "HOME_PHONE": 3}
+    query = (ctable.pe_id == user.pe_id) & \
+            (ctable.contact_method.belongs(list(priority.keys()))) & \
+            (ctable.deleted == False)
+    rows = db(query).select(ctable.priority,
+                            ctable.contact_method,
+                            ctable.value,
+                            orderby = (ctable.priority, ~(ctable.modified_on)),
+                            )
+    if rows:
+        rank = lambda row: row.priority * 10 + priority[row.contact_method]
+        numbers = sorted(((row.value, rank(row)) for row in rows), key = lambda i: i[1])
+        data["Telefon"] = numbers[0][0]
+
+    return data
+
+# =============================================================================
+def shelter_mailmerge_fields(resource, record):
+    """
+        Lookup mailmerge-data about the current user
+
+        Args:
+            resource: the context resource (pr_person)
+            record: the context record (beneficiary)
+
+        Returns:
+            Shelter registration details as dict
+            {Name, Wohneinheit, Adresse, PLZ, Ort}
+    """
+
+    db = current.db
+    s3db = current.s3db
+
+    person_id = record.get("pr_person.id")
+
+    # Look up the shelter registration for person_id
+    rtable = s3db.cr_shelter_registration
+    stable = s3db.cr_shelter
+    utable = s3db.cr_shelter_unit
+    ltable = s3db.gis_location
+
+    left = [stable.on(stable.id == rtable.shelter_id),
+            utable.on(utable.id == rtable.shelter_unit_id),
+            ltable.on(ltable.id == stable.location_id),
+            ]
+
+    query = (rtable.person_id == person_id) & \
+            (rtable.registration_status.belongs((1, 2))) & \
+            (rtable.deleted == False)
+
+    row = db(query).select(rtable.id,
+                           stable.id,
+                           stable.name,
+                           ltable.id,
+                           ltable.addr_street,
+                           ltable.addr_postcode,
+                           ltable.L4,
+                           ltable.L3,
+                           utable.id,
+                           utable.name,
+                           left = left,
+                           limitby = (0, 1),
+                           ).first()
+    data = {}
+    if row:
+        shelter = row.cr_shelter
+        if shelter.id:
+            data["Name"] = shelter.name
+
+        unit = row.cr_shelter_unit
+        if unit.id:
+            data["Wohneinheit"] = unit.name
+
+        location = row.gis_location
+        if location.id:
+            data["Ort"] = location.L4 or location.L3
+            if location.addr_street:
+                data["Adresse"] = location.addr_street
+            if location.addr_postcode:
+                data["PLZ"] = location.addr_postcode
+
+    return data
+
+# =============================================================================
+# Helpers for DVR rheader
+# =============================================================================
+def client_name_age(record):
+    """
+        Represent a client as name, gender and age; for case file rheader
+
+        Args:
+            record: the client record (pr_person)
+
+        Returns:
+            HTML
+    """
+
+    T = current.T
+
+    pr_age = current.s3db.pr_age
+
+    age = pr_age(record)
+    if age is None:
+        age = "?"
+        unit = T("years")
+    elif age == 0:
+        age = pr_age(record, months=True)
+        unit = T("months") if age != 1 else T("month")
+    else:
+        unit = T("years") if age != 1 else T("year")
+
+    icons = {2: "fa fa-venus",
+             3: "fa fa-mars",
+             4: "fa fa-transgender-alt",
+             }
+    icon = I(_class=icons.get(record.gender, "fa fa-genderless"))
+
+    client = TAG[""](s3_fullname(record, truncate=False),
+                     SPAN(icon, "%s %s" % (age, unit), _class="client-gender-age"),
+                     )
+    return client
+
+# -----------------------------------------------------------------------------
+def last_seen_represent(date, label):
+    """
+        Represent last-seen-on date as warning if more than 3/5 days back;
+        for case file rheader
+
+        Args:
+            date: the date (datetime.datetime)
+            label: the represented date
+
+        Returns:
+            HTML or label
+    """
+
+    if date:
+        days = relativedelta(datetime.datetime.utcnow(), date).days
+        if days > 5:
+            icon = I(_class="fa fa-exclamation-triangle")
+            title = "> %s %s" % (days, current.T("days"))
+            label = SPAN(label, icon, _class="last-seen-critical", _title=title)
+        elif days > 3:
+            icon = I(_class="fa fa-exclamation-circle")
+            title = "> %s %s" % (days, current.T("days"))
+            label = SPAN(label, icon, _class="last-seen-warning", _title=title)
+
+    return label
+
+# =============================================================================
+class AbsenceFilter(RangeFilter):
+    """ Custom filter for last-seen-on date, represented as "days since" """
+
+    operator = ["gt"]
+
+    # Untranslated labels for individual input boxes.
+    input_labels = {"gt": "More than"}
 
     # -------------------------------------------------------------------------
-    def extract(self):
-        """
-            Extract the data for this report
-        """
+    @classmethod
+    def _variable(cls, selector, operator):
 
-        db = current.db
-        s3db = current.s3db
+        return super()._variable("$$absence", operator)
+
+    # -------------------------------------------------------------------------
+    def widget(self, resource, values):
+        """
+            Render this widget as HTML helper object(s)
+
+            Args:
+                resource: the resource
+                values: the search values from the URL query
+        """
 
         T = current.T
 
-        site_id = self.site_id
-        date = self.date
+        css_base = self.css_base
 
-        # Get all flags for which cases shall be excluded
-        ftable = s3db.dvr_case_flag
-        query = (ftable.nostats == True) & \
-                (ftable.deleted == False)
-        rows = db(query).select(ftable.id)
-        nostats = set(row.id for row in rows)
+        attr = self.attr
+        css = attr.get("class")
+        attr["_class"] = "%s %s" % (css, css_base) if css else css_base
 
-        # Identify the relevant cases
-        ctable = s3db.dvr_case
-        ltable = s3db.dvr_case_flag_case
+        input_class = "%s-%s" % (css_base, "input")
+        input_labels = self.input_labels
+        input_elements = DIV()
+        ie_append = input_elements.append
 
-        num_nostats_flags = ltable.id.count()
-        left = ltable.on((ltable.person_id == ctable.person_id) & \
-                         (ltable.flag_id.belongs(nostats)) & \
-                         (ltable.deleted == False))
+        _id = attr["_id"]
+        _variable = self._variable
+        selector = self.selector
 
-        query = (ctable.site_id == site_id) & \
-                ((ctable.date == None) | (ctable.date <= date)) & \
-                ((ctable.closed_on == None) | (ctable.closed_on >= date)) & \
-                (ctable.archived != True) & \
-                (ctable.deleted != True)
+        opts = self.opts
+        minimum = opts.get("minimum", 1)
+        maximum = opts.get("maximum", 7)
 
+        for operator in self.operator:
 
-        rows = db(query).select(ctable.id,
-                                ctable.person_id,
-                                ctable.date,
-                                ctable.closed_on,
-                                num_nostats_flags,
-                                groupby = ctable.id,
-                                left = left,
-                                )
+            input_id = "%s-%s" % (_id, operator)
 
-        # Count them
-        old_total, ins, outs = 0, 0, 0
-        person_ids = set()
-        for row in rows:
-            if row[num_nostats_flags]:
-                continue
-            case = row.dvr_case
-            person_ids.add(case.person_id)
-            if not case.date or case.date < date:
-                old_total += 1
-            else:
-                ins += 1
-            if case.closed_on and case.closed_on == date:
-                outs += 1
-        result = {"old_total": old_total,
-                  "new_total": old_total - outs + ins,
-                  "ins": ins,
-                  "outs": outs,
-                  }
+            variable = _variable(selector, operator)
 
-        # Add completed appointments as pr_person components
-        atypes = {"BAMF": None,
-                  "GU": None,
-                  "Transfer": None,
-                  "X-Ray": None,
-                  "Querverlegung": None,
-                  }
-        COMPLETED = 4
-        attable = s3db.dvr_case_appointment_type
-        query = attable.name.belongs(set(atypes.keys()))
-        rows = db(query).select(attable.id,
-                                attable.name,
-                                )
-        add_components = s3db.add_components
-        hooks = []
-        for row in rows:
-            type_id = row.id
-            name = row.name
-            atypes[name] = alias = "appointment%s" % type_id
-            hook = {"name": alias,
-                    "joinby": "person_id",
-                    "filterby": {"type_id": type_id,
-                                 "status": COMPLETED,
-                                 },
-                    }
-            hooks.append(hook)
-        s3db.add_components("pr_person", dvr_case_appointment = hooks)
-        date_completed = lambda t: (T("%(event)s on") % {"event": T(t)},
-                                    "%s.date" % atypes[t],
-                                    )
+            # Populate with the value, if given
+            # if user has not set any of the limits, we get [] in values.
+            value = values.get(variable, None)
+            if value not in [None, []]:
+                if type(value) is list:
+                    value = value[0]
+                try:
+                    value = int(value)
+                except (ValueError, TypeError):
+                    value = None
 
-        # Filtered component for paid allowances
-        PAID = 2
-        add_components("pr_person",
-                       dvr_allowance = {"name": "payment",
-                                        "joinby": "person_id",
-                                        "filterby": {"status": PAID},
-                                        },
-                       )
+            # Selectable options
+            input_opts = [OPTION("%s" % i, value=i) if value != i else
+                          OPTION("%s" % i, value=i, _selected="selected")
+                          for i in range(minimum, maximum + 1)
+                          ]
+            input_opts.insert(0, OPTION("", value=""))
 
-        # Represent paid_on as date
-        atable = s3db.dvr_allowance
-        atable.paid_on.represent = lambda dt: \
-                                   S3DateTime.date_represent(dt,
-                                                             utc=True,
-                                                             )
-
-        # Filtered component for preliminary residence permit
-        s3db.add_components("pr_person",
-                            pr_identity = {"name": "residence_permit",
-                                           "joinby": "person_id",
-                                           "filterby": {"type": 5},
-                                           "multiple": False,
-                                           },
-                            )
-
-        # Filtered component for family
-        s3db.add_components("pr_person",
-                            pr_group = {"name": "family",
-                                        "link": "pr_group_membership",
-                                        "joinby": "person_id",
-                                        "key": "group_id",
-                                        "filterby": {"group_type": 7},
-                                        },
-                            )
-
-        # Get family roles
-        gtable = s3db.pr_group
-        mtable = s3db.pr_group_membership
-        join = gtable.on(gtable.id == mtable.group_id)
-        query = (mtable.person_id.belongs(person_ids)) & \
-                (mtable.deleted != True) & \
-                (gtable.group_type == 7)
-        rows = db(query).select(mtable.person_id,
-                                mtable.group_head,
-                                mtable.role_id,
-                                join = join,
-                                )
-
-        # Bulk represent all possible family roles (to avoid repeated lookups)
-        represent = mtable.role_id.represent
-        rtable = s3db.pr_group_member_role
-        if hasattr(represent, "bulk"):
-            query = (rtable.group_type == 7) & (rtable.deleted != True)
-            roles = db(query).select(rtable.id)
-            role_ids = [role.id for role in roles]
-            represent.bulk(role_ids)
-
-        # Create a dict of {person_id: role}
-        roles = {}
-        HEAD_OF_FAMILY = T("Head of Family")
-        for row in rows:
-            person_id = row.person_id
-            role = row.role_id
-            if person_id in roles:
-                continue
-            if (row.group_head):
-                roles[person_id] = HEAD_OF_FAMILY
-            elif role:
-                roles[person_id] = represent(role)
-
-        # Field method to determine the family role
-        def family_role(row):
-            person_id = row["pr_person.id"]
-            return roles.get(person_id, "")
-
-        # Dummy virtual fields to produce empty columns
-        from s3dal import Field
-        ptable = s3db.pr_person
-        empty = lambda row: ""
-        if not hasattr(ptable, "xray_place"):
-            ptable.xray_place = Field.Method("xray_place", empty)
-        if not hasattr(ptable, "family_role"):
-            ptable.family_role = Field.Method("family_role", family_role)
-
-        # List fields for the report
-        list_fields = ["family.id",
-                       (T("ID"), "pe_label"),
-                       (T("Name"), "last_name"),
-                       "first_name",
-                       "date_of_birth",
-                       "gender",
-                       "person_details.nationality",
-                       (T("Family Role"), "family_role"),
-                       (T("Room No."), "shelter_registration.shelter_unit_id"),
-                       "case_flag_case.flag_id",
-                       "dvr_case.comments",
-                       date_completed("GU"),
-                       date_completed("X-Ray"),
-                       (T("X-Ray Place"), "xray_place"),
-                       date_completed("BAMF"),
-                       (T("BÜMA valid until"), "dvr_case.valid_until"),
-                       (T("Preliminary Residence Permit until"), "residence_permit.valid_until"),
-                       (T("Allowance Payments"), "payment.paid_on"),
-                       (T("Admitted on"), "dvr_case.date"),
-                       "dvr_case.origin_site_id",
-                       date_completed("Transfer"),
-                       date_completed("Querverlegung"),
-                       #"dvr_case.closed_on",
-                       "dvr_case.status_id",
-                       "dvr_case.destination_site_id",
-                       ]
-
-        query = FS("id").belongs(person_ids)
-        resource = s3db.resource("pr_person", filter = query)
-
-        data = resource.select(list_fields,
-                               represent = True,
-                               raw_data = True,
-                               # Keep families together, eldest member first
-                               orderby = ["pr_family_group.id",
-                                          "pr_person.date_of_birth",
-                                          ],
+            # Input Element
+            input_box = SELECT(input_opts,
+                               _id = input_id,
+                               _class = input_class,
+                               _value = value,
                                )
 
-        # Generate headers, labels, types for XLS report
-        rfields = data.rfields
-        columns = []
-        headers = {}
-        types = {}
-        for rfield in rfields:
-            colname = rfield.colname
-            if colname in ("dvr_case_flag_case.flag_id",
-                           "pr_family_group.id",
-                           ):
-                continue
-            columns.append(colname)
-            headers[colname] = rfield.label
-            types[colname] = rfield.ftype
+            label = input_labels[operator]
+            if label:
+                label = DIV(LABEL("%s:" % T(input_labels[operator]),
+                                  _for = input_id,
+                                  ),
+                            _class = "age-filter-label",
+                            _style = "display:inline-block",
+                            )
 
-        # Post-process rows
-        rows = []
-        for row in data.rows:
+            ie_append(DIV(label,
+                          DIV(input_box,
+                              _class = "range-filter-widget",
+                              _style = "display:inline-block",
+                              ),
+                          _class = "range-filter-field",
+                          ))
 
-            flags = "dvr_case_flag_case.flag_id"
-            comments = "dvr_case.comments"
+        ie_append(DIV(LABEL(T("Days")),
+                      _class = "age-filter-unit",
+                      ))
 
-            raw = row["_row"]
-            if raw[flags]:
-                items = ["%s: %s" % (T("Advice"), s3_str(row[flags]))]
-                if raw[comments]:
-                    items.insert(0, raw[comments])
-                row[comments] = ", ".join(items)
-            rows.append(row)
-
-        # Add XLS report data to result
-        report = {"columns": columns,
-                  "headers": headers,
-                  "types": types,
-                  "rows": rows,
-                  }
-        result["report"] = report
-
-        return result
+        return input_elements
 
     # -------------------------------------------------------------------------
-    def store(self, authorised=None):
+    @staticmethod
+    def apply_filter(resource, get_vars):
         """
-            Store this report in dvr_site_activity
-        """
-
-        db = current.db
-        s3db = current.s3db
-        auth = current.auth
-        settings = current.deployment_settings
-
-        # Table name and table
-        tablename = "dvr_site_activity"
-        table = s3db.table(tablename)
-        if not table:
-            return None
-
-        # Get the current site activity record
-        query = (table.date == self.date) & \
-                (table.site_id == self.site_id) & \
-                (table.deleted != True)
-        row = db(query).select(table.id,
-                               limitby = (0, 1),
-                               orderby = ~table.created_on,
-                               ).first()
-
-        # Check permission
-        if authorised is None:
-            has_permission = current.auth.s3_has_permission
-            if row:
-                authorised = has_permission("update", tablename, record_id=row.id)
-            else:
-                authorised = has_permission("create", tablename)
-        if not authorised:
-            from core import S3PermissionError
-            raise S3PermissionError
-
-        # Extract the data
-        data = self.extract()
-
-        # Custom header for Excel Export (disabled for now)
-        settings.base.xls_title_row = lambda sheet: self.summary(sheet, data)
-
-        # Export as XLS
-        title = current.T("Resident List")
-        from core import DataExporter
-        exporter = DataExporter.xls
-        report = exporter(data["report"],
-                          title = title,
-                          as_stream = True,
-                          )
-
-        # Construct the filename
-        filename = "%s_%s_%s.xls" % (title, self.site_id, str(self.date))
-
-        # Store the report
-        report_ = table.report.store(report, filename)
-        record = {"site_id": self.site_id,
-                  "old_total": data["old_total"],
-                  "new_total": data["new_total"],
-                  "cases_new": data["ins"],
-                  "cases_closed": data["outs"],
-                  "date": self.date,
-                  "report": report_,
-                  }
-
-        # Customize resource
-        from core import CRUDRequest
-        r = CRUDRequest("dvr", "site_activity",
-                        current.request,
-                        args = [],
-                        get_vars = {},
-                        )
-        r.customise_resource("dvr_site_activity")
-
-        if row:
-            # Trigger auto-delete of the previous file
-            row.update_record(report=None)
-            # Update it
-            success = row.update_record(**record)
-            if success:
-                s3db.onaccept(table, record, method="create")
-                result = row.id
-            else:
-                result = None
-        else:
-            # Create a new one
-            record_id = table.insert(**record)
-            if record_id:
-                record["id"] = record_id
-                s3db.update_super(table, record)
-                auth.s3_set_record_owner(table, record_id)
-                auth.s3_make_session_owner(table, record_id)
-                s3db.onaccept(table, record, method="create")
-                result = record_id
-            else:
-                result = None
-
-        return result
-
-    # -------------------------------------------------------------------------
-    def summary(self, sheet, data=None):
-        """
-            Header for the Excel sheet
-
-            Args:
-                sheet: the sheet
-                data: the data dict from extract()
-
-            Returns:
-                the number of rows in the header
+            Filter out volunteers who have a confirmed deployment during
+            selected date interval
         """
 
-        length = 3
+        days = get_vars.get("$$absence__gt")
+        if days:
+            try:
+                days = int(days)
+            except (ValueError, TypeError):
+                return
 
-        if sheet is not None and data is not None:
-
-            T = current.T
-            output = (("Date", S3DateTime.date_represent(self.date, utc=True)),
-                      ("Previous Total", data["old_total"]),
-                      ("Admissions", data["ins"]),
-                      ("Departures", data["outs"]),
-                      ("Current Total", data["new_total"]),
-                      )
-
-            import xlwt
-            label_style = xlwt.XFStyle()
-            label_style.font.bold = True
-
-            col_index = 3
-            for label, value in output:
-                label_ = s3_str(T(label))
-                value_ = s3_str(value)
-
-                # Adjust column width
-                width = max(len(label_), len(value_))
-                sheet.col(col_index).width = max(width * 310, 2000)
-
-                # Write the label
-                current_row = sheet.row(0)
-                current_row.write(col_index, label_, label_style)
-
-                # Write the data
-                current_row = sheet.row(1)
-                current_row.write(col_index, value_)
-                col_index += 1
-
-        return length
+            now = current.request.utcnow
+            latest = now - datetime.timedelta(hours = days * 24)
+            resource.add_filter((FS("dvr_case.last_seen_on") != None) & \
+                                (FS("dvr_case.last_seen_on") < latest))
 
 # END =========================================================================

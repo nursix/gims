@@ -6,8 +6,6 @@
 
 from gluon import current
 
-from core import FS
-
 # -------------------------------------------------------------------------
 def org_group_controller(**attr):
 
@@ -98,6 +96,31 @@ def org_organisation_filter_widgets(is_org_group_admin=False):
     return filter_widgets
 
 # -------------------------------------------------------------------------
+def configure_org_components():
+
+    s3db = current.s3db
+
+    # Make sure default model is loaded first
+    s3db.table("org_organisation")
+
+    # Configure filtered components document/template
+    s3db.add_components("org_organisation",
+                        doc_document = ({"name": "document",
+                                         "joinby": "organisation_id",
+                                         "filterby": {"is_template": False,
+                                                      "doc_id": None,
+                                                      },
+                                         },
+                                        {"name": "template",
+                                         "joinby": "organisation_id",
+                                         "filterby": {"is_template": True,
+                                                      "doc_id": None,
+                                                      },
+                                         },
+                                        ),
+                        )
+
+# -------------------------------------------------------------------------
 def org_organisation_controller(**attr):
 
     T = current.T
@@ -105,6 +128,8 @@ def org_organisation_controller(**attr):
 
     s3 = current.response.s3
     settings = current.deployment_settings
+
+    configure_org_components()
 
     is_org_group_admin = auth.s3_has_role("ORG_GROUP_ADMIN")
 
@@ -228,8 +253,10 @@ def org_organisation_controller(**attr):
                            ]
             r.component.configure(list_fields=list_fields)
 
-        elif r.component_name == "document":
-            r.component.add_filter(FS("doc_id") == None)
+        elif r.component_name in ("document", "template"):
+
+            from .doc import doc_customise_documents
+            doc_customise_documents(r, r.component.table)
 
         return result
     s3.prep = prep
@@ -256,7 +283,21 @@ def org_organisation_controller(**attr):
 
 # -------------------------------------------------------------------------
 def site_presence_validate_id(label):
-    # TODO docstring
+    """
+        Validates the ID label during presence/checkpoint registration
+
+        Args:
+            label: the ID label (possibly including validation details)
+
+        Returns:
+            tuple (pe_label, advice, error), with
+                - pe_label: the actual PE label (without validation details)
+                - advice: advice to display (if validation not possible)
+                - error: validation error (if validation failed)
+
+        Note:
+            no pe_label will be returned if validation was possible but failed
+    """
 
     from ..idcards import IDCard
 
@@ -288,9 +329,9 @@ def site_presence_validate_id(label):
                 advice = T("Verify signature: %(signature)s") % {"signature": signature}
             else:
                 advice = T("No valid registration card found")
-    elif not error:
+    elif error:
         # No person found with this ID
-        pass
+        pe_label = None
 
     return pe_label, advice, error
 

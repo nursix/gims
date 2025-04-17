@@ -4,11 +4,13 @@
     License: MIT
 """
 
-from gluon import current, URL, DIV, H4, P, TAG
+from collections import OrderedDict
 
-from core import S3CRUD, FS, IS_ONE_OF, \
+from gluon import current, URL, DIV, H4, P, TAG, IS_EMPTY_OR
+
+from core import BasicCRUD, FS, IS_ONE_OF, \
                  LocationSelector, PresenceRegistration, S3SQLCustomForm, \
-                 get_form_record_id, s3_fieldmethod
+                 get_form_record_id, s3_fieldmethod, s3_str, represent_occupancy
 
 # -------------------------------------------------------------------------
 def client_site_status(person_id, site_id, site_type, case_status):
@@ -138,7 +140,7 @@ def staff_site_status(person_id, site_id, organisation_ids):
             (htable.deleted == False)
     staff = db(query).select(htable.id, limitby=(0, 1)).first()
 
-    valid = True if staff else False
+    valid = bool(staff)
 
     result = {"valid": valid,
               "allowed_in": valid,
@@ -282,7 +284,7 @@ def cr_shelter_resource(r, tablename):
 
     table = s3db.cr_shelter
 
-    # Configure fields
+    # Configure location selector
     field = table.location_id
     field.widget = LocationSelector(levels = ("L1", "L2", "L3", "L4"),
                                     required_levels = ("L1", "L2", "L3"),
@@ -294,8 +296,16 @@ def cr_shelter_resource(r, tablename):
                                     )
     field.represent = s3db.gis_LocationRepresent(show_link = False)
 
+    # Custom label for obsolete-flag
     field = table.obsolete
     field.label = T("Defunct")
+
+    # Organisation is required, + cannot be created from here
+    field = table.organisation_id
+    requires = field.requires
+    if isinstance(requires, IS_EMPTY_OR):
+        field.requires = requires.other
+    field.comment = None
 
     # Custom form
     crud_fields = ["name",
@@ -327,6 +337,7 @@ def cr_shelter_resource(r, tablename):
                                      f ="shelter",
                                      args = ["[id]", "shelter_unit"],
                                      ),
+                   ignore_master_access = ("shelter_note",),
                    )
 
     # Shelter overview method
@@ -346,12 +357,25 @@ def cr_shelter_resource(r, tablename):
 def cr_shelter_controller(**attr):
 
     T = current.T
+
+    db = current.db
+    s3db = current.s3db
     auth = current.auth
 
     s3 = current.response.s3
     settings = current.deployment_settings
 
+    rtable = s3db.cr_shelter_registration
+    htable = s3db.cr_shelter_registration_history
+
+    is_admin = auth.s3_has_role("ADMIN")
     is_org_group_admin = auth.s3_has_role("ORG_GROUP_ADMIN")
+    is_shelter_admin = auth.s3_has_role("SHELTER_ADMIN")
+
+    # Custom components
+    s3db.add_components("cr_shelter",
+                        cr_shelter_note = "shelter_id",
+                        )
 
     # Custom prep
     standard_prep = s3.prep
@@ -359,74 +383,82 @@ def cr_shelter_controller(**attr):
         # Call standard prep
         result = standard_prep(r) if callable(standard_prep) else True
 
+        resource = r.resource
+        resource.configure(filter_widgets = None)
+
+        # Restrict organisation selector
+        s3db.org_restrict_for_organisations(resource)
+
+        if is_org_group_admin and r.component_name != "shelter_note":
+            # Show all records by default
+            settings.ui.datatables_pagelength = -1
+
         if r.method == "presence":
             # Configure presence event callbacks
-            current.s3db.configure("cr_shelter",
-                                   site_presence_in = on_site_presence_event,
-                                   site_presence_out = on_site_presence_event,
-                                   site_presence_seen = on_site_presence_event,
-                                   site_presence_status = person_site_status,
-                                   )
-
-        else:
-            if r.record and r.method == "profile":
-                # Add PoI layer to the Map
-                s3db = current.s3db
-                ftable = s3db.gis_layer_feature
-                query = (ftable.controller == "gis") & \
-                        (ftable.function == "poi")
-                layer = current.db(query).select(ftable.layer_id,
-                                                 limitby = (0, 1)
-                                                 ).first()
-                try:
-                    layer_id = layer.layer_id
-                except AttributeError:
-                    # No suitable prepop found
-                    pass
-                else:
-                    pois = {"active": True,
-                            "layer_id": layer_id,
-                            "name": current.T("Buildings"),
-                            "id": "profile-header-%s-%s" % ("gis_poi", r.id),
-                            }
-                    profile_layers = s3db.get_config("cr_shelter", "profile_layers")
-                    profile_layers += (pois,)
-                    s3db.configure("cr_shelter",
-                                   profile_layers = profile_layers,
-                                   )
-            #else:
-                #has_role = current.auth.s3_has_role
-                #if has_role("SECURITY") and not has_role("ADMIN"):
-                #    # Security can access nothing in cr/shelter except
-                #    # Dashboard and Check-in/out UI
-                #    current.auth.permission.fail()
-
-            if r.interactive:
-                # TODO should also be deletable while there are no shelter registrations
-                #      => probably the individual record only, not from list
-                r.resource.configure(filter_widgets = None,
-                                     deletable = False,
-                                     )
+            resource.configure(site_presence_in = on_site_presence_event,
+                               site_presence_out = on_site_presence_event,
+                               site_presence_seen = on_site_presence_event,
+                               site_presence_status = person_site_status,
+                               )
 
         if not r.component:
             # Open shelter basic details in read mode
             settings.ui.open_read_first = True
 
-        #elif r.component_name == "shelter_unit":
-            ## Expose "transitory" flag for housing units
-            #utable = current.s3db.cr_shelter_unit
-            #field = utable.transitory
-            #field.readable = field.writable = True
+            # Deletability
+            if r.record and is_admin:
+                shelter_id = r.record.id
+                query = (rtable.shelter_id == shelter_id) | \
+                        (rtable.last_shelter_id == shelter_id)
+                row = db(query).select(rtable.id, limitby=(0, 1)).first()
+                if not row:
+                    query = (htable.shelter_id == shelter_id)
+                    row = db(query).select(htable.id, limitby=(0, 1)).first()
+                resource.configure(deletable = not row)
+            else:
+                resource.configure(deletable = is_admin)
 
-            ## Custom list fields
-            #list_fields = [(T("Name"), "name"),
-                           #"transitory",
-                           #"capacity",
-                           #"population",
-                           #"blocked_capacity",
-                           #"available_capacity",
-                           #]
-            #r.component.configure(list_fields=list_fields)
+            if r.representation == "json":
+                # Make sure list_fields include site_id
+                # - required by site_id filterOptionsS3 lookup (e.g. act/issue)
+                list_fields = resource.get_config("list_fields")
+                if not list_fields:
+                    list_fields = ["id", "site_id"]
+                elif "site_id" not in list_fields:
+                    list_fields.append("site_id")
+                resource.configure(list_fields=list_fields)
+
+        elif r.component_name != "document":
+            # Customise doc_document in any case (for inline-attachments)
+            r.customise_resource("doc_document")
+
+        if r.component_name == "shelter_unit":
+
+            if is_shelter_admin:
+                from core import OptionsFilter, TextFilter
+                r.component.configure(
+                    filter_widgets = [
+                        TextFilter(["name", "comments"],
+                                   label = T("Search"),
+                                   ),
+                        OptionsFilter("status",
+                                      options = OrderedDict((("1", T("Available")),
+                                                             ("2", T("Not allocable")),
+                                                             ("3", T("Closed"))
+                                                             )),
+                                      default = [1, 2],
+                                      cols = 3,
+                                      sort = False,
+                                      ),
+                        ]
+                    )
+                settings.search.filter_manager = False
+            else:
+                r.component.add_filter(FS("status") != 3)
+
+        elif r.component_name == "shelter_note":
+            settings.ui.open_read_first = True
+            current.s3db.cr_configure_shelter_note_form(r)
 
         elif r.component_name == "document":
             r.component.add_filter(FS("doc_id") == None)
@@ -456,16 +488,52 @@ def cr_shelter_controller(**attr):
 
         record = r.record
 
+        if is_admin and not record and not r.component and r.method != "deduplicate":
+
+            # Default action buttons (except delete)
+            BasicCRUD.action_buttons(r, deletable =False)
+
+            # Identify shelters which have never been occupied
+            table = r.resource.table
+            occupied = db(rtable.shelter_id!=None)._select(rtable.shelter_id, distinct=True)
+            previous = db(rtable.last_shelter_id!=None)._select(rtable.last_shelter_id, distinct=True)
+            historic = db(htable.shelter_id!=None)._select(htable.shelter_id, distinct=True)
+
+            query = (table.id.belongs(occupied)) | \
+                    (table.id.belongs(previous)) | \
+                    (table.id.belongs(historic))
+            rows = db(~query).select(table.id)
+            unused = [str(row.id) for row in rows]
+
+            # Delete-button for those
+            DELETE = s3_str(T("Delete"))
+            enabled = {"label": DELETE,
+                       "url": URL(args = ["[id]", "delete"], vars=r.get_vars),
+                       "_class": "delete-btn",
+                       "restrict": unused,
+                       }
+            s3.actions.append(enabled)
+
+            # Disabled delete-button for all others,
+            # indicating that and why the action is disabled
+            disabled = {"label": DELETE,
+                        "_class": "action-btn",
+                        "_title": s3_str(T("Shelter is or was occupied")),
+                        "_disabled": "disabled",
+                        "exclude": unused,
+                        }
+            s3.actions.append(disabled)
+
         # Add presence registration button, if permitted
         if record and not r.component and \
-            PresenceRegistration.permitted("cr_shelter", record) and \
-            isinstance(output, dict) and "buttons" in output:
+           PresenceRegistration.permitted("cr_shelter", record=record) and \
+           isinstance(output, dict) and "buttons" in output:
 
             buttons = output["buttons"]
 
             # Add a "Presence Registration"-button
             presence_url = URL(c="cr", f="shelter", args=[record.id, "presence"])
-            presence_btn = S3CRUD.crud_button(T("Presence Registration"), _href=presence_url)
+            presence_btn = BasicCRUD.crud_button(T("Presence Registration"), _href=presence_url)
 
             delete_btn = buttons.get("delete_btn")
             buttons["delete_btn"] = TAG[""](presence_btn, delete_btn) \
@@ -478,9 +546,10 @@ def cr_shelter_controller(**attr):
     attr = dict(attr)
     attr["rheader"] = cr_rheader
 
-    if is_org_group_admin:
-        # Show all records by default
-        settings.ui.datatables_pagelength = -1
+    # Activate filters on component tabs
+    attr["hide_filter"] = {"shelter_unit": not is_shelter_admin,
+                           "shelter_note": False,
+                           }
 
     return attr
 
@@ -501,7 +570,7 @@ def cr_shelter_unit_resource(r, tablename):
 
     table.occupancy = s3_fieldmethod("occupancy",
                                      shelter_unit_occupancy,
-                                     represent = occupancy_represent,
+                                     represent = represent_occupancy,
                                      )
 
     list_fields = [(T("Name"), "name"),
@@ -567,34 +636,6 @@ def shelter_unit_occupancy(row):
         return (population * 100 // available)
 
 # -------------------------------------------------------------------------
-def occupancy_represent(value):
-    """
-        Represents occupancy% as progress bar
-
-        Args:
-            value - the occupancy in % (integer >= 0)
-        Returns:
-            DIV.occupancy-bar
-    """
-
-    if value is None:
-        return DIV("?", _class="occupancy-bar")
-    elif not value:
-        value = 0
-        css_class = "occupancy-0"
-    else:
-        reprval = (value - 1) // 10 * 10 + 10
-        if reprval > 100:
-            css_class = "occupancy-exc"
-        else:
-            css_class = "occupancy-%s" % reprval
-
-    return DIV("%s%%" % value,
-               DIV(_class="occupancy %s" % css_class),
-               _class="occupancy-bar",
-               )
-
-# -------------------------------------------------------------------------
 def cr_shelter_unit_controller(**attr):
 
     db = current.db
@@ -621,7 +662,7 @@ def cr_shelter_unit_controller(**attr):
                                         limitby = (0, 1),
                                         orderby = ~rtable.id,
                                         ).first()
-                current_unit = reg.shelter_unit_id
+                current_unit = reg.shelter_unit_id if reg else None
             else:
                 current_unit = None
 
@@ -670,7 +711,6 @@ def cr_shelter_registration_resource(r, tablename):
 
     if r.controller == "cr":
         # Filter to available housing units
-        from gluon import IS_EMPTY_OR
         field.requires = IS_EMPTY_OR(IS_ONE_OF(current.db, "cr_shelter_unit.id",
                                                field.represent,
                                                filterby = "status",
@@ -744,5 +784,23 @@ def cr_shelter_registration_controller(**attr):
     s3.prep = custom_prep
 
     return attr
+
+# -------------------------------------------------------------------------
+def cr_shelter_registration_history_resource(r, tablename):
+
+    T = current.T
+    s3db = current.s3db
+
+    list_fields = ["date",
+                   (T("Status"), "status"),
+                   "shelter_id",
+                   (T("Registered by"), "created_by"),
+                   ]
+
+    s3db.configure(tablename,
+                   list_fields = list_fields,
+                   # Oldest first, to match rhist.js registrationHistory
+                   orderby = "%s.date" % tablename,
+                   )
 
 # END =========================================================================

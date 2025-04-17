@@ -6,17 +6,14 @@
 
 import datetime
 
-from dateutil import tz
-
-from gluon import current, URL, A, INPUT, SQLFORM, TAG, IS_EMPTY_OR
+from gluon import current, URL, A, TAG, IS_EMPTY_OR
 from gluon.storage import Storage
 
-from s3dal import Field
-from core import CRUDMethod, CRUDRequest, CustomController, FS, IS_ONE_OF, \
-                 S3PermissionError, S3DateTime, S3SQLCustomForm, S3SQLInlineLink, \
-                 DateFilter, OptionsFilter, TextFilter, \
-                 get_form_record_id, s3_fieldmethod, s3_redirect_default, \
-                 set_default_filter, set_last_record_id, s3_fullname, s3_str
+from core import CRUDRequest, CustomController, FS, IS_ONE_OF, \
+                 S3CalendarWidget, S3HoursWidget, S3SQLCustomForm, S3SQLInlineLink, \
+                 DateFilter, HierarchyFilter, OptionsFilter, TextFilter, \
+                 get_filter_options, get_form_record_id, s3_redirect_default, \
+                 represent_hours, set_default_filter, s3_fullname
 
 from .pr import configure_person_tags
 
@@ -122,16 +119,72 @@ def dvr_case_resource(r, tablename):
                 field.writable = False
 
 # -------------------------------------------------------------------------
+def dvr_task_controller(**attr):
+
+    s3db = current.s3db
+    s3 = current.response.s3
+
+    current.deployment_settings.base.bigtable = True
+
+    # Custom prep
+    standard_prep = s3.prep
+    def prep(r):
+
+        # Call standard prep
+        result = standard_prep(r) if callable(standard_prep) else True
+
+        if r.controller == "counsel":
+            categories = {"A", "C"}
+            default_category = "C"
+        else:
+            categories = {"A"}
+            default_category = "A"
+
+        s3db.dvr_configure_case_tasks(r,
+                                      categories = categories,
+                                      default_category = default_category,
+                                      )
+        resource = r.resource
+        resource.configure(insertable = False,
+                           deletable = False,
+                           )
+        return result
+    s3.prep = prep
+
+    from ..rheaders import dvr_rheader
+    attr["rheader"] = dvr_rheader
+    return attr
+
+# -------------------------------------------------------------------------
+def note_date_dt_orderby(field, direction, orderby, left_joins):
+    """
+        When sorting notes by date, use created_on to maintain
+        consistent order of multiple notes on the same date
+    """
+
+    sorting = {"table": field.tablename,
+               "direction": direction,
+               }
+    orderby.append("%(table)s.date%(direction)s,%(table)s.created_on%(direction)s" % sorting)
+
+# -------------------------------------------------------------------------
 def dvr_note_resource(r, tablename):
-    # TODO review + refactor
 
     T = current.T
+
+    db = current.db
+    s3db = current.s3db
     auth = current.auth
 
-    if not auth.s3_has_role("ADMIN"):
+    table = s3db.dvr_note
 
-        db = current.db
-        s3db = current.s3db
+    # Consistent ordering of notes (newest on top)
+    field = table.date
+    field.represent.dt_orderby = note_date_dt_orderby
+
+    type_id = "note_type_id"
+
+    if not auth.s3_has_role("ADMIN"):
 
         # Restrict access by note type
         GENERAL = "General"
@@ -145,16 +198,14 @@ def dvr_note_resource(r, tablename):
             has_roles = auth.s3_has_roles
 
             # Roles permitted to access "Security" type notes
-            SECURITY_ROLES = ("ADMIN_HEAD",
-                              "SECURITY_HEAD",
-                              "POLICE",
-                              "MEDICAL",
+            SECURITY_ROLES = ("CASE_ADMIN",
+                              "SECURITY",
                               )
             if has_roles(SECURITY_ROLES):
                 permitted_note_types.append(SECURITY)
 
             # Roles permitted to access "Health" type notes
-            MEDICAL_ROLES = ("ADMIN_HEAD",
+            MEDICAL_ROLES = ("CASE_ADMIN",
                              "MEDICAL",
                              )
             if has_roles(MEDICAL_ROLES):
@@ -167,23 +218,56 @@ def dvr_note_resource(r, tablename):
         else:
             r.resource.add_component_filter("case_note", query)
 
-        # Filter note type selector to permitted note types
-        ttable = s3db.dvr_note_type
-        query = ttable.name.belongs(permitted_note_types)
-        rows = db(query).select(ttable.id)
-        note_type_ids = [row.id for row in rows]
+        # Filter note-type selector
+        ttable = current.s3db.dvr_note_type
+        dbset = db((ttable.is_task == False) & \
+                   (ttable.name.belongs(permitted_note_types)))
 
-        table = s3db.dvr_note
         field = table.note_type_id
-        field.label = T("Category")
-
-        if len(note_type_ids) == 1:
-            field.default = note_type_ids[0]
-            field.writable = False
-
-        field.requires = IS_ONE_OF(db(query), "dvr_note_type.id",
+        field.label = T("Confidentiality")
+        field.comment = T("Restricts access to this entry (e.g. medical notes are only accessible for medical team)")
+        field.requires = IS_ONE_OF(dbset, "dvr_note_type.id",
                                    field.represent,
                                    )
+
+        # Hide note type selector if only one choice
+        note_types = dbset.select(ttable.id, ttable.name)
+        if len(note_types) == 1:
+            field.default = note_types.first().id
+            field.readable = field.writable = False
+            type_id = None # hide from list
+        else:
+            general = note_types.find(lambda row: row.name == GENERAL)
+            if general:
+                field.default = general.first().id
+
+        if field.default:
+            field.requires.zero = None
+
+    # Make author visible
+    field = table.created_by
+    field.label = T("Author")
+    field.readable = True
+
+    form_fields = ["date", "note", type_id, "created_by"]
+    list_fields = ["date", "note", type_id, "created_by"]
+    s3db.configure("dvr_note",
+                   crud_form = S3SQLCustomForm(*form_fields),
+                   list_fields = list_fields,
+                   orderby = "%(tn)s.date desc,%(tn)s.created_on desc" % \
+                             {"tn": table._tablename},
+                   pdf_format = "list",
+                   pdf_fields = list_fields,
+                   )
+
+# -------------------------------------------------------------------------
+def dvr_need_resource(r, tablename):
+
+    table = current.s3db.dvr_need
+
+    # Expose code
+    field = table.code
+    field.readable = field.writable = True
 
 # -------------------------------------------------------------------------
 def dvr_case_activity_resource(r, tablename):
@@ -257,6 +341,355 @@ def dvr_case_activity_controller(**attr):
     return attr
 
 # -------------------------------------------------------------------------
+def configure_response_action_reports(r,
+                                      multiple_orgs = False,
+                                      ):
+    """
+        Configures pivot report options for response actions
+
+        Args:
+            r: the CRUDRequest
+            multiple_orgs: user has permission to read response actions
+                           for multiple organisations (boolean)
+    """
+
+    T = current.T
+
+    # Custom Report Options
+    facts = ((T("Number of Actions"), "count(id)"),
+             (T("Number of Clients"), "count(person_id)"),
+             (T("Hours (Total)"), "sum(hours)"),
+             (T("Hours (Average)"), "avg(hours)"),
+             )
+    axes = ["person_id$gender",
+            "person_id$person_details.nationality",
+            #"person_id$person_details.marital_status",
+            #(T("Size of Family"), "person_id$dvr_case.household_size"),
+            "response_type_id",
+            (T("Theme"), "response_action_theme.theme_id"),
+            (T("Need Type"), "response_action_theme.theme_id$need_id"),
+            "response_action_theme.theme_id$sector_id",
+            "human_resource_id",
+            ]
+    if multiple_orgs:
+        # Add case organisation as report axis
+        axes.append("person_id$dvr_case.organisation_id")
+
+    report_options = {
+        "rows": axes,
+        "cols": axes,
+        "fact": facts,
+        "defaults": {"rows": "response_type_id",
+                     "cols": None,
+                     "fact": "count(id)",
+                     "totals": True,
+                     },
+        "precision": {"hours": 2, # higher precision is impractical
+                      },
+        }
+
+    current.s3db.configure("dvr_response_action",
+                           report_options = report_options,
+                           )
+
+# -------------------------------------------------------------------------
+def configure_response_action_filters(r,
+                                      on_tab = None,
+                                      multiple_orgs = False,
+                                      organisation_ids = None,
+                                      ):
+    """
+        Configures filter widgets for dvr_response_action
+
+        Args:
+            r: the CRUDRequest
+            on_tab: viewing response tab in case file (boolean)
+            multiple_orgs: user can see cases of multiple organisations,
+                           so include an organisation-filter
+            organisation_ids: the IDs of the organisations the user can access
+    """
+
+    T = current.T
+
+    s3db = current.s3db
+    table = s3db.dvr_response_action
+
+    if on_tab is None:
+        resource = r.resource
+        on_tab = resource.tablename != "dvr_response_action"
+
+    is_report = r.method == "report"
+
+    if on_tab:
+        filter_widgets = [TextFilter(["response_action_theme.comments",
+                                      ],
+                                     label = T("Search"),
+                                     ),
+                          DateFilter("start_date",
+                                     hide_time = True,
+                                     hidden = True,
+                                     ),
+                          HierarchyFilter("response_type_id",
+                                          hidden = True,
+                                          ),
+                          OptionsFilter("response_action_theme.theme_id$sector_id",
+                                        hidden = True,
+                                        ),
+                          OptionsFilter("response_action_theme.theme_id",
+                                        hidden = True,
+                                        ),
+                          ]
+    else:
+        # TODO add case status filter
+        from ..helpers import get_response_theme_sectors
+        filter_widgets = [
+            TextFilter(["person_id$pe_label",
+                        "person_id$first_name",
+                        "person_id$middle_name",
+                        "person_id$last_name",
+                        "response_action_theme.comments"
+                        ],
+                       label = T("Search"),
+                       ),
+            DateFilter("start_date",
+                       hide_time = True,
+                       hidden = not is_report,
+                       ),
+            OptionsFilter("status_id",
+                          options = lambda: \
+                                    get_filter_options("dvr_response_status",
+                                                       orderby = "workflow_position",
+                                                       ),
+                          cols = 3,
+                          orientation = "rows",
+                          sort = False,
+                          size = None,
+                          translate = True,
+                          hidden = True,
+                          ),
+            HierarchyFilter("response_type_id",
+                            hidden = True,
+                            ),
+            OptionsFilter("response_action_theme.theme_id$sector_id",
+                          header = True,
+                          hidden = True,
+                          options = get_response_theme_sectors,
+                          ),
+            OptionsFilter("response_action_theme.theme_id",
+                          header = True,
+                          hidden = True,
+                          options = lambda: \
+                                    get_filter_options("dvr_response_theme",
+                                                       org_filter = True,
+                                                       ),
+                          ),
+            ]
+
+        if multiple_orgs:
+            # Add case organisation filter
+            if organisation_ids:
+                # Provide the permitted organisations as filter options
+                org_filter_opts = s3db.org_organisation_represent.bulk(organisation_ids,
+                                                                       show_link = False,
+                                                                       )
+                org_filter_opts.pop(None, None)
+            else:
+                # Look up from records
+                org_filter_opts = None
+            filter_widgets.insert(1, OptionsFilter("person_id$dvr_case.organisation_id",
+                                                   options = org_filter_opts,
+                                                   ))
+
+        # Filter by person responsible
+        field = table.human_resource_id
+        try:
+            hr_filter_opts = field.requires.options()
+        except AttributeError:
+            pass
+        else:
+            hr_filter_opts = dict(hr_filter_opts)
+            hr_filter_opts.pop('', None)
+        if hr_filter_opts:
+            filter_widgets.append(OptionsFilter("human_resource_id",
+                                                header = True,
+                                                hidden = True,
+                                                options = hr_filter_opts,
+                                                ))
+
+    s3db.configure("dvr_response_action",
+                   filter_widgets = filter_widgets,
+                   )
+
+# -------------------------------------------------------------------------
+def dvr_response_action_resource(r, tablename):
+
+    T = current.T
+
+    s3db = current.s3db
+
+    atable = s3db.dvr_response_action
+    ltable = s3db.dvr_response_action_theme
+
+    on_tab = r.controller == "counsel" and r.resource.tablename == "pr_person"
+
+    if on_tab and r.representation in ("html", "aadata", "pdf"):
+        # Show details per theme in interactive view and PDF exports
+        ltable.id.represent = s3db.dvr_ResponseActionThemeRepresent(paragraph = True,
+                                                                    details = True,
+                                                                    )
+        themes = (T("Themes"), "response_action_theme.id")
+    else:
+        # Show just list of themes
+        themes = (T("Themes"), "response_action_theme.theme_id")
+
+    # Configure hours-fields for both total and per-theme efforts
+    for field in (ltable.hours, atable.hours):
+        field.widget = S3HoursWidget(precision = 2,
+                                     placeholder = "HH:MM",
+                                     explicit_above = 3,
+                                     )
+        field.represent = represent_hours()
+
+    if on_tab:
+        person_id, pe_label = None, None
+        configure_response_action_filters(r, on_tab=True)
+    else:
+        person_id, pe_label = "person_id", (T("ID"), "person_id$pe_label")
+        field = atable.person_id
+        field.readable = True
+        field.writable = False
+        field.represent =  s3db.pr_PersonRepresent(show_link = True,
+                                                   linkto = URL(c = r.controller,
+                                                                f = "person",
+                                                                args = ["[id]"],
+                                                                extension = "",
+                                                                ),
+                                                   )
+        field.comment = None
+
+    field = atable.human_resource_id
+    field.represent = s3db.hrm_HumanResourceRepresent(show_link=False)
+
+    # List fields
+    list_fields = [pe_label,
+                   person_id,
+                   "start_date",
+                   "response_type_id",
+                   themes,
+                   "human_resource_id",
+                   "hours",
+                   "status_id",
+                   ]
+    pdf_fields = [pe_label,
+                  person_id,
+                  "start_date",
+                  "response_type_id",
+                  themes,
+                  "human_resource_id",
+                  ]
+
+    s3db.configure("dvr_response_action",
+                   list_fields = list_fields,
+                   pdf_format = "list" if on_tab else "table",
+                   pdf_fields = pdf_fields,
+                   orderby = "dvr_response_action.start_date desc, dvr_response_action.created_on desc",
+                   )
+
+# -------------------------------------------------------------------------
+def dvr_response_action_controller(**attr):
+
+    T = current.T
+    db = current.db
+    s3db = current.s3db
+
+    s3 = current.response.s3
+    settings = current.deployment_settings
+
+    settings.base.bigtable = True
+
+    #standard_prep = s3.prep
+    def prep(r):
+
+        # Call standard prep
+        #result = standard_prep(r) if callable(standard_prep) else True
+        result = True
+
+        resource = r.resource
+        table = resource.table
+
+        # Beneficiary is required and must have a case file
+        ptable = s3db.pr_person
+        ctable = s3db.dvr_case
+        dbset = db((ptable.id == ctable.person_id) & \
+                   (ctable.archived == False) & \
+                   (ctable.deleted == False))
+        field = table.person_id
+        field.requires = IS_ONE_OF(dbset, "pr_person.id", field.represent)
+
+        # Set defaults
+        s3db.dvr_set_response_action_defaults()
+
+        # Create/delete requires context perspective
+        resource.configure(insertable = False,
+                           deletable = False,
+                           )
+
+        record = r.record
+        if not record:
+            # Exclude archived (invalid) cases
+            query = (FS("person_id$dvr_case.archived") == False) | \
+                    (FS("person_id$dvr_case.archived") == None)
+            resource.add_filter(query)
+
+            from ..helpers import get_case_organisations
+            multiple_orgs, organisation_ids = get_case_organisations()
+
+            configure_response_action_filters(r,
+                                              on_tab = False,
+                                              multiple_orgs = multiple_orgs,
+                                              organisation_ids = organisation_ids,
+                                              )
+            configure_response_action_reports(r,
+                                              multiple_orgs = multiple_orgs,
+                                              )
+
+            # pisets = {pitype: (method, icon, title)}
+            pisets = {"default": ("indicators",
+                                  "line-chart",
+                                  T("Performance Indicators"),
+                                  ),
+                      "bamf": ("indicators_bamf",
+                               "tachometer",
+                               "%s %s" % (T("Performance Indicators"), "BAMF"),
+                               ),
+                      }
+
+            from ..stats import PerformanceIndicatorExport
+            for pitype in ("bamf", "default"):
+                piset = pisets.get(pitype)
+                if not piset:
+                    continue
+                method, icon, title = piset
+                s3db.set_method("dvr_response_action",
+                                method = method,
+                                action = PerformanceIndicatorExport(pitype),
+                                )
+                export_formats = list(settings.get_ui_export_formats())
+                fmt = "%s.xls" % method
+                export_formats.insert(0, (fmt, "fa fa-%s" % icon, title))
+                s3.formats[fmt] = r.url(method=method)
+                settings.ui.export_formats = export_formats
+
+        elif settings.get_dvr_vulnerabilities():
+            # Limit selectable vulnerabilities to case
+            s3db.dvr_configure_case_vulnerabilities(record.person_id)
+
+        return result
+    s3.prep = prep
+
+    return attr
+
+# -------------------------------------------------------------------------
 def dvr_case_appointment_resource(r, tablename):
 
     T = current.T
@@ -289,9 +722,12 @@ def dvr_case_appointment_resource(r, tablename):
     # Configure Organizer
     if title:
         s3db.configure("dvr_case_appointment",
-                       organize = {"start": "date",
+                       organize = {#"start": "date",
+                                   "start": "start_date",
+                                   "end": "end_date",
                                    "title": title,
                                    "description": description,
+                                   "reload_on_update": True,
                                    # Color by status
                                    "color": "status",
                                    "colors": {
@@ -304,6 +740,30 @@ def dvr_case_appointment_resource(r, tablename):
                                        7: "#666",    # not required (gray)
                                        }
                                    },
+                       )
+
+    if r.tablename == "dvr_case_appointment":
+
+        from ..bulk import CompleteAppointments
+        s3db.set_method("dvr_case_appointment", method="complete", action=CompleteAppointments)
+
+        bulk_actions = [{"label": T("Mark Completed##appointment"),
+                         "mode": "ajax",
+                         "url": r.url(method="complete", representation="json", vars={}),
+                         "script": S3CalendarWidget.global_scripts(current.calendar.name)[0],
+                         }]
+
+        s3db.configure("dvr_case_appointment",
+                       bulk_actions = bulk_actions,
+                       )
+
+    else:
+        s3db.configure("dvr_case_appointment",
+                       list_fields = ["type_id",
+                                      (T("Date"), "start_date"),
+                                      "status",
+                                      "comments",
+                                      ],
                        )
 
 # -------------------------------------------------------------------------
@@ -384,6 +844,7 @@ def dvr_case_appointment_controller(**attr):
                     TextFilter(["person_id$pe_label",
                                 "person_id$first_name",
                                 "person_id$last_name",
+                                "person_id$dvr_case.reference",
                                 ],
                                 label = T("Search"),
                                 ),
@@ -414,10 +875,11 @@ def dvr_case_appointment_controller(**attr):
                     now = r.utcnow
                     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
                     tomorrow = today + datetime.timedelta(days=1)
-                    filter_widgets.insert(-2, DateFilter("date",
-                                                        default = {"ge": today,
-                                                                   "le": tomorrow,
-                                                                   },
+                    filter_widgets.insert(-2, DateFilter(#"date",
+                                                         "start_date",
+                                                         default = {"ge": today,
+                                                                    "le": tomorrow,
+                                                                    },
                                               ))
 
                 # Add organisation filter if user can see appointments
@@ -441,17 +903,16 @@ def dvr_case_appointment_controller(**attr):
 
             # Custom list fields
             list_fields = [(T("ID"), "person_id$pe_label"),
-                           "person_id$first_name",
-                           "person_id$last_name",
+                           (T("Principal Ref.No."), "person_id$dvr_case.reference"),
+                           # TODO render as link to person if not XLS
+                           (T("Name"), "person_id"),
                            "type_id",
-                           "date",
+                           #"date",
+                           (T("Date"), "start_date"),
+                           #"end_date",
                            "status",
                            "comments",
                            ]
-
-            #if r.representation in ("xlsx", "xls"):
-            #    # Include Person UUID for bulk status update
-            #    list_fields.append(("UUID", "person_id$uuid"))
 
             resource.configure(list_fields = list_fields,
                                insertable = False,
@@ -479,9 +940,6 @@ def case_event_report_default_filters(event_code=None):
         if event_code[-1] == "*":
             query = (ttable.code.like("%s%%" % event_code[:-1])) & \
                     (ttable.is_inactive == False)
-            if event_code[:-1] == "FOOD":
-                # Include SURPLUS-MEALS events
-                query |= (ttable.code == "SURPLUS-MEALS")
         else:
             query = (ttable.code == event_code)
         query &= (ttable.deleted == False)
@@ -510,88 +968,27 @@ def dvr_case_event_resource(r, tablename):
 
     s3db = current.s3db
 
-    from ..food import FoodDistribution
+    from ..checkpoints import ActivityParticipation, FoodDistribution
+    s3db.set_method("dvr_case_event",
+                    method = "register_activity",
+                    action = ActivityParticipation,
+                    )
     s3db.set_method("dvr_case_event",
                     method = "register_food",
                     action = FoodDistribution,
                     )
 
-    #s3db.add_custom_callback("dvr_case_event",
-    #                         "onaccept",
-    #                         case_event_create_onaccept,
-    #                         method = "create",
-    #                         )
+    from ..reports import MealsReport
+    s3db.set_method("dvr_case_event",
+                    method = "meals_report",
+                    action = MealsReport,
+                    )
 
 # -------------------------------------------------------------------------
 def dvr_case_event_controller(**attr):
 
-    T = current.T
+    auth = current.auth
     s3 = current.response.s3
-
-    standard_prep = s3.prep
-    def custom_prep(r):
-        # Call standard prep
-        if callable(standard_prep):
-            result = standard_prep(r)
-        else:
-            result = True
-
-        resource = r.resource
-        table = resource.table
-
-        if r.method == "report":
-            # Set report default filters
-            event_code = r.get_vars.get("code")
-            case_event_report_default_filters(event_code)
-
-            dates = MRCMSCaseEventDateAxes()
-
-            # Field method for day-date of events
-            table.date_day = s3_fieldmethod(
-                                "date_day",
-                                dates.case_event_date_day,
-                                represent = dates.case_event_date_day_represent,
-                                )
-            table.date_tod = s3_fieldmethod(
-                                "date_tod",
-                                dates.case_event_time_of_day,
-                                )
-
-            # Pivot axis options
-            report_axes = ["type_id",
-                           (T("Date"), "date_day"),
-                           (T("Time of Day"), "date_tod"),
-                           "created_by",
-                           ]
-
-            # Configure report options
-            code = r.get_vars.get("code")
-            if code and code[-1] != "*":
-                # Single event type => group by ToD (legacy)
-                default_cols = "date_tod"
-            else:
-                # Group by type (standard behavior)
-                default_cols = "type_id"
-            report_options = {
-                "rows": report_axes,
-                "cols": report_axes,
-                "fact": [(T("Total Quantity"), "sum(quantity)"),
-                         #(T("Number of Events"), "count(id)"),
-                         ],
-                "defaults": {"rows": "date_day",
-                             "cols": default_cols,
-                             "fact": "sum(quantity)",
-                             "totals": True,
-                             },
-                }
-            resource.configure(report_options = report_options,
-                               extra_fields = ["date",
-                                               "person_id",
-                                               "type_id",
-                                               ],
-                               )
-        return result
-    s3.prep = custom_prep
 
     # Custom postp
     standard_postp = s3.postp
@@ -600,41 +997,18 @@ def dvr_case_event_controller(**attr):
         if callable(standard_postp):
             output = standard_postp(r, output)
 
-        if r.method in ("register", "register_food"):
+        if r.interactive and \
+           r.method in ("register", "register_food", "register_activity"):
+            if isinstance(output, dict):
+                if auth.permission.has_permission("read", c="dvr", f="person"):
+                    output["return_url"] = URL(c="dvr", f="person")
+                else:
+                    output["return_url"] = URL(c="default", f="index")
             CustomController._view("MRCMS", "register_case_event.html")
         return output
     s3.postp = custom_postp
 
     return attr
-
-# -------------------------------------------------------------------------
-def managed_orgs_field():
-    """
-        Returns a Field with an organisation selector, to be used
-        for imports of organisation-specific types
-    """
-
-    db = current.db
-    s3db = current.s3db
-    auth = current.auth
-
-    from ..helpers import get_managed_orgs
-
-    if auth.s3_has_role("ADMIN"):
-        dbset = db
-    else:
-        managed_orgs = []
-        for role in ("ORG_GROUP_ADMIN", "ORG_ADMIN"):
-            if auth.s3_has_role(role):
-                managed_orgs = get_managed_orgs(role=role)
-        otable = s3db.org_organisation
-        dbset = db(otable.id.belongs(managed_orgs))
-
-    field = Field("organisation_id", "reference org_organisation",
-                  requires = IS_ONE_OF(dbset, "org_organisation.id", "%(name)s"),
-                  represent = s3db.org_OrganisationRepresent(),
-                  )
-    return field
 
 # -------------------------------------------------------------------------
 def dvr_case_appointment_type_controller(**attr):
@@ -645,8 +1019,9 @@ def dvr_case_appointment_type_controller(**attr):
     s3 = current.response.s3
 
     # Selectable organisation
+    from ..helpers import managed_orgs_field
     attr["csv_extra_fields"] = [{"label": "Organisation",
-                                 "field": managed_orgs_field(),
+                                 "field": managed_orgs_field,
                                  }]
 
     # Custom postp
@@ -684,15 +1059,22 @@ def dvr_case_event_type_resource(r, tablename):
     # TODO filter case event exclusion to types of same org
     #      if we have a r.record, otherwise OptionsFilterS3?
 
-    crud_form = S3SQLCustomForm("organisation_id",
+    # Custom form
+    crud_form = S3SQLCustomForm(# --- Event Type ---
+                                "organisation_id",
                                 "event_class",
                                 "code",
                                 "name",
                                 "is_inactive",
                                 "is_default",
+                                # --- Process ---
+                                "appointment_type_id",
+                                "activity_id",
+                                "presence_required",
+                                # --- Restrictions ---
+                                "residents_only",
                                 "register_multiple",
                                 "role_required",
-                                "appointment_type_id",
                                 "min_interval",
                                 "max_per_day",
                                 S3SQLInlineLink("excluded_by",
@@ -700,11 +1082,18 @@ def dvr_case_event_type_resource(r, tablename):
                                                 label = T("Not Combinable With"),
                                                 comment = T("Events that exclude registration of this event type on the same day"),
                                                 ),
-                                "presence_required",
                                 )
 
+    # Sub-headings for custom form
+    subheadings = {"organisation_id": T("Event Type"),
+                   "appointment_type_id": T("Documentation"),
+                   "residents_only": T("Restrictions"),
+                   }
+
+    # Reconfigure
     s3db.configure("dvr_case_event_type",
                    crud_form = crud_form,
+                   subheadings = subheadings,
                    )
 
 # -------------------------------------------------------------------------
@@ -718,8 +1107,9 @@ def dvr_case_event_type_controller(**attr):
     s3 = current.response.s3
 
     # Selectable organisation
+    from ..helpers import managed_orgs_field
     attr["csv_extra_fields"] = [{"label": "Organisation",
-                                 "field": managed_orgs_field(),
+                                 "field": managed_orgs_field,
                                  }]
 
     standard_prep = s3.prep
@@ -778,8 +1168,9 @@ def dvr_case_flag_controller(**attr):
     s3 = current.response.s3
 
     # Selectable organisation
+    from ..helpers import managed_orgs_field
     attr["csv_extra_fields"] = [{"label": "Organisation",
-                                 "field": managed_orgs_field(),
+                                 "field": managed_orgs_field,
                                  }]
 
     # Custom postp
@@ -824,36 +1215,6 @@ def dvr_service_contact_resource(r, tablename):
     field = table.organisation
     field.label = T("Organization")
     field.readable = field.writable = True
-
-# -------------------------------------------------------------------------
-def dvr_site_activity_resource(r, tablename):
-
-    T = current.T
-    s3db = current.s3db
-
-    s3db.set_method("dvr_site_activity",
-                    method = "create",
-                    action = MRCMSCreateSiteActivityReport,
-                    )
-    s3db.configure("dvr_site_activity",
-                   listadd = False,
-                   addbtn = True,
-                   editable = False,
-                   )
-
-    crud_strings = current.response.s3.crud_strings
-    crud_strings["dvr_site_activity"] = Storage(
-        label_create = T("Create Residents Report"),
-        title_display = T("Residents Report"),
-        title_list = T("Residents Reports"),
-        title_update = T("Edit Residents Report"),
-        label_list_button = T("List Residents Reports"),
-        label_delete_button = T("Delete Residents Report"),
-        msg_record_created = T("Residents Report created"),
-        msg_record_modified = T("Residents Report updated"),
-        msg_record_deleted = T("Residents Report deleted"),
-        msg_list_empty = T("No Residents Reports found"),
-        )
 
 # =============================================================================
 def dvr_person_prep(r):
@@ -1020,8 +1381,10 @@ def dvr_person_prep(r):
 
 # =============================================================================
 def dvr_group_membership_prep(r):
-    # TODO docstring
-    # TODO integrate in pr_group_membership_controller?
+    """
+        Custom copy of dvr/group_membership prep(), so it can be called
+        in proxy controllers too (e.g. counsel/group_membership)
+    """
 
     db = current.db
     s3db = current.s3db
@@ -1035,20 +1398,15 @@ def dvr_group_membership_prep(r):
     settings.pr.request_home_phone = False
     settings.hrm.email_required = False
 
-    get_vars = r.get_vars
-    if "viewing" in get_vars:
-
-        try:
-            vtablename, record_id = get_vars["viewing"].split(".")
-        except ValueError:
-            return False
-
-        if vtablename == "pr_person":
+    viewing = r.viewing
+    if viewing:
+        if viewing[0] == "pr_person":
+            person_id = viewing[1]
 
             # Get all group_ids with this person_id
             gtable = s3db.pr_group
             join = gtable.on(gtable.id == table.group_id)
-            query = (table.person_id == record_id) & \
+            query = (table.person_id == person_id) & \
                     (gtable.group_type == 7) & \
                     (table.deleted != True)
             rows = db(query).select(table.group_id, join=join)
@@ -1059,16 +1417,15 @@ def dvr_group_membership_prep(r):
                 # Single group ID?
                 group_id = tuple(group_ids)[0] if len(group_ids) == 1 else None
             elif r.http == "POST":
-                name = s3_fullname(record_id)
+                name = s3_fullname(person_id)
                 group_id = gtable.insert(name=name, group_type=7)
                 s3db.update_super(gtable, {"id": group_id})
                 table.insert(group_id = group_id,
-                             person_id = record_id,
-                             group_head = True,
-                             )
+                                person_id = person_id,
+                                group_head = True,
+                                )
                 group_ids = {group_id}
-            resource.add_filter(FS("person_id") != record_id)
-
+            resource.add_filter(FS("person_id") != person_id)
         else:
             group_ids = set()
 
@@ -1108,247 +1465,5 @@ def dvr_group_membership_prep(r):
         field.comment = None
 
     return True
-
-# =============================================================================
-class MRCMSCaseEventDateAxes:
-    """
-        Helper class for virtual date axes in case event statistics
-    """
-
-    def __init__(self):
-        """
-            Perform all slow lookups outside of the field methods
-        """
-
-        # Get timezone descriptions
-        self.UTC = tz.tzutc()
-        self.LOCAL = tz.gettz("Europe/Berlin")
-
-        # Lookup FOOD event type_id
-        table = current.s3db.dvr_case_event_type
-        query = (table.code == "FOOD") & \
-                (table.deleted != True)
-        row = current.db(query).select(table.id, limitby=(0, 1)).first()
-        self.FOOD = row.id if row else None
-
-        self.SURPLUS_MEALS = s3_str(current.T("Surplus Meals"))
-
-    # -------------------------------------------------------------------------
-    def case_event_date_day(self, row):
-        """
-            Field method to reduce case event date/time to just date,
-            used in pivot table reports to group case events by day
-        """
-
-        if hasattr(row, "dvr_case_event"):
-            row = row.dvr_case_event
-
-        try:
-            date = row.date
-        except AttributeError:
-            date = None
-
-        if date:
-            # Get local hour
-            date = date.replace(tzinfo=self.UTC).astimezone(self.LOCAL)
-            hour = date.time().hour
-
-            # Convert to date
-            date = date.date()
-            if hour <= 7:
-                # Map early hours to previous day
-                return date - datetime.timedelta(days=1)
-        else:
-            date = None
-        return date
-
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def case_event_date_day_represent(value):
-        """
-            Representation method for case_event_date_day, needed in order
-            to sort pivot axis values by raw date, but show them in locale
-            format (default DD.MM.YYYY, doesn't sort properly).
-        """
-
-        return S3DateTime.date_represent(value, utc=True)
-
-    # -------------------------------------------------------------------------
-    def case_event_time_of_day(self, row):
-        """
-            Field method to group events by time of day
-        """
-
-        if hasattr(row, "dvr_case_event"):
-            row = row.dvr_case_event
-
-        try:
-            date = row.date
-        except AttributeError:
-            date = None
-
-        if date:
-            try:
-                person_id = row.person_id
-                type_id = row.type_id
-            except AttributeError:
-                person_id = 0
-                type_id = None
-
-            if type_id == self.FOOD and person_id is None:
-                tod = self.SURPLUS_MEALS
-            else:
-                date = date.replace(tzinfo=self.UTC).astimezone(self.LOCAL)
-                hour = date.time().hour
-
-                if 7 <= hour < 13:
-                    tod = "07:00 - 13:00"
-                elif 13 <= hour < 17:
-                    tod = "13:00 - 17:00"
-                elif 17 <= hour < 20:
-                    tod = "17:00 - 20:00"
-                else:
-                    tod = "20:00 - 07:00"
-        else:
-            tod = "-"
-        return tod
-
-# =============================================================================
-class MRCMSCreateSiteActivityReport(CRUDMethod):
-    """ Custom method to create a dvr_site_activity entry """
-
-    def apply_method(self, r, **attr):
-        """
-            Entry point for REST controller
-
-            Args:
-                r: the CRUDRequest
-                attr: dict of controller parameters
-        """
-
-        if r.representation in ("html", "iframe"):
-            if r.http in ("GET", "POST"):
-                output = self.create_form(r, **attr)
-            else:
-                r.error(405, current.ERROR.BAD_METHOD)
-        else:
-            r.error(415, current.ERROR.BAD_FORMAT)
-
-        return output
-
-    # -------------------------------------------------------------------------
-    def create_form(self, r, **attr):
-        """
-            Generate and process the form
-
-            Args:
-                r: the CRUDRequest
-                attr: dict of controller parameters
-        """
-
-        # User must be permitted to create site activity reports
-        authorised = self._permitted(method="create")
-        if not authorised:
-            r.unauthorised()
-
-        s3db = current.s3db
-
-        T = current.T
-        response = current.response
-        settings = current.deployment_settings
-
-        # Page title
-        output = {"title": T("Create Residents Report")}
-
-        # Form fields
-        table = s3db.dvr_site_activity
-        table.date.default = r.utcnow.date()
-        formfields = [table.site_id,
-                      table.date,
-                      ]
-
-        # Form buttons
-        submit_btn = INPUT(_class = "tiny primary button",
-                           _name = "submit",
-                           _type = "submit",
-                           _value = T("Create Report"),
-                           )
-        cancel_btn = A(T("Cancel"),
-                       _href = r.url(id=None, method=""),
-                       _class = "action-lnk",
-                       )
-        buttons = [submit_btn, cancel_btn]
-
-        # Generate the form and add it to the output
-        resourcename = r.resource.name
-        formstyle = settings.get_ui_formstyle()
-        form = SQLFORM.factory(record = None,
-                               showid = False,
-                               formstyle = formstyle,
-                               table_name = resourcename,
-                               buttons = buttons,
-                               *formfields)
-        output["form"] = form
-
-        # Process the form
-        formname = "%s/manage" % resourcename
-        if form.accepts(r.post_vars,
-                        current.session,
-                        formname = formname,
-                        onvalidation = self.validate,
-                        keepvalues = False,
-                        hideerror = False,
-                        ):
-
-            from ..helpers import MRCMSSiteActivityReport
-            formvars = form.vars
-            report = MRCMSSiteActivityReport(site_id = formvars.site_id,
-                                           date = formvars.date,
-                                           )
-            try:
-                record_id = report.store()
-            except S3PermissionError:
-                # Redirect to list view rather than index page
-                current.auth.permission.homepage = r.url(id=None, method="")
-                r.unauthorised()
-
-            r.resource.lastid = str(record_id)
-            set_last_record_id("dvr_site_activity", record_id)
-
-            current.response.confirmation = T("Report created")
-            self.next = r.url(id=record_id, method="read")
-
-        response.view = self._view(r, "create.html")
-
-        return output
-
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def validate(form):
-        """
-            Validate the form
-
-            Args:
-                form: the FORM
-        """
-
-        T = current.T
-        formvars = form.vars
-
-        if "site_id" in formvars:
-            site_id = formvars.site_id
-        else:
-            # Fall back to default site
-            site_id = current.deployment_settings.get_org_default_site()
-        if not site_id:
-            form.errors["site_id"] = T("No site specified")
-        formvars.site_id = site_id
-
-        if "date" in formvars:
-            date = formvars.date
-        else:
-            # Fall back to today
-            date = current.request.utcnow.date()
-        formvars.date = date
 
 # END =========================================================================

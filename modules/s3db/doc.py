@@ -30,7 +30,7 @@ __all__ = ("DocumentEntityModel",
            "DocumentTagModel",
            "DocumentCKEditorModel",
            "DocumentDataCardModel",
-           "doc_image_represent",
+           "doc_rheader",
            "doc_document_list_layout",
            )
 
@@ -57,7 +57,8 @@ class DocumentEntityModel(DataModel):
         # ---------------------------------------------------------------------
         # Document-referencing entities
         #
-        entity_types = {"asset_asset": T("Asset"),
+        entity_types = {"act_activity": T("Activity"),
+                        "asset_asset": T("Asset"),
                         "cap_resource": T("CAP Resource"),
                         "cms_post": T("Post"),
                         "cr_shelter": T("Shelter"),
@@ -245,7 +246,7 @@ class DocumentModel(DataModel):
                   super_entity = "stats_source",
                   )
 
-        # Reusable field (e.g. for link tables)
+        # Foreign Key Template (e.g. for link tables)
         represent = doc_DocumentRepresent(lookup = tablename,
                                           fields = ("name", "file", "url"),
                                           labels = "%(name)s",
@@ -295,7 +296,7 @@ class DocumentModel(DataModel):
                            autodelete = True,
                            label = T("File"),
                            length = current.MAX_FILENAME_LENGTH,
-                           represent = doc_image_represent,
+                           represent = represent_image(),
                            requires = IS_EMPTY_OR(
                                         IS_IMAGE(extensions = (s3.IMAGE_EXTENSIONS)),
                                         # Distinguish from prepop
@@ -312,6 +313,7 @@ class DocumentModel(DataModel):
                            ),
                      Field("url",
                            label = T("URL"),
+                           represent = s3_url_represent,
                            requires = IS_EMPTY_OR(IS_URL()),
                            ),
 
@@ -400,7 +402,12 @@ class DocumentModel(DataModel):
                 return current.T("File not found")
             else:
                 return A(origname,
-                         _href=URL(c="default", f="download", args=[filename]))
+                         _href=URL(c = "default",
+                                   f = "download",
+                                   args = [filename],
+                                   vars = {"otn": "doc_document"},
+                                   ),
+                         )
         else:
             return current.messages["NONE"]
 
@@ -491,8 +498,8 @@ class DocumentModel(DataModel):
                 form_vars.name = doc.filename
 
         # Do a checksum on the file to see if it's a duplicate
-        #import cgi
-        #if isinstance(doc, cgi.FieldStorage) and doc.filename:
+        #is_upload = hasattr(doc, "file") and hasattr(doc, "filename")
+        #if is_upload and doc.filename:
         #    f = doc.file
         #    form_vars.checksum = doc_checksum(f.read())
         #    f.seek(0)
@@ -554,27 +561,55 @@ class DocumentTagModel(DataModel):
         return None
 
 # =============================================================================
-def doc_image_represent(filename):
-    """
-        Represent an image as a clickable thumbnail
+def doc_rheader(r, tabs=None):
+    """ DOC resource headers """
 
-        Args:
-            filename: name of the image file
-    """
+    if r.representation != "html":
+        # Resource headers only used in interactive views
+        return None
 
-    if not filename:
-        return current.messages["NONE"]
+    tablename, record = s3_rheader_resource(r)
+    if tablename != r.tablename:
+        resource = current.s3db.resource(tablename, id=record.id)
+    else:
+        resource = r.resource
 
-    return DIV(A(IMG(_src = URL(c="default", f="download", args=filename),
-                     # handled by CSS:
-                     #_height = 80,
-                     #_width = 120,
-                     _class = "img-preview",
-                     ),
-                 _class = "zoom",
-                 _href = URL(c="default", f="download", args=filename),
-                 ),
-               )
+    rheader = None
+    rheader_fields = []
+
+    if record:
+
+        T = current.T
+
+        if tablename == "doc_document":
+            if not tabs:
+                tabs = [(T("Basic Details"), None),
+                        ]
+            rheader_fields = [["organisation_id", "file"],
+                              ["person_id", "url"],
+                              ["date"],
+                              ]
+            rheader_title = "name"
+
+            rheader = S3ResourceHeader(rheader_fields, tabs, title=rheader_title)
+            rheader = rheader(r, table=resource.table, record=record)
+
+        elif tablename == "doc_image":
+            if not tabs:
+                tabs = [(T("Basic Details"), None),
+                        ]
+            rheader_fields = [["type"],
+                              ["date"],
+                              ]
+            rheader_title = "name"
+
+        else:
+            return None
+
+        rheader = S3ResourceHeader(rheader_fields, tabs, title=rheader_title)
+        rheader = rheader(r, table=resource.table, record=record)
+
+    return rheader
 
 # =============================================================================
 def doc_checksum(docstr):
@@ -854,7 +889,7 @@ class DocumentDataCardModel(DataModel):
                                 label = T("Signature"),
                                 autodelete = True,
                                 length = current.MAX_FILENAME_LENGTH,
-                                represent = doc_image_represent,
+                                represent = represent_image("doc_card_config", "signature"),
                                 requires = IS_EMPTY_OR(IS_IMAGE(extensions=(s3.IMAGE_EXTENSIONS)),
                                                        # Distinguish from prepop
                                                        null = "",

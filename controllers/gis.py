@@ -413,9 +413,9 @@ def location():
                 table.parent.comment = parent_comment
             else:
                 # Include 'Create Location' button
-                table.parent.comment = DIV(S3PopupLink(c="gis",
-                                                       f="location",
-                                                       vars=dict(child="parent")),
+                table.parent.comment = DIV(PopupLink(c="gis",
+                                                     f="location",
+                                                     vars=dict(child="parent")),
                                            parent_comment)
 
             table.inherited.comment = DIV(_class="tooltip",
@@ -3895,7 +3895,7 @@ def proxy():
     from urllib import request as urllib2
     from urllib.error import URLError
     from urllib.request import urlopen
-    import cgi
+    from urllib.parse import parse_qs
 
     if auth.is_logged_in():
         # Authenticated users can use our Proxy
@@ -3935,7 +3935,7 @@ def proxy():
         # This can probably use same call as GET in web2py
         qs = request["wsgi"].environ["QUERY_STRING"]
 
-        d = cgi.parse_qs(qs)
+        d = parse_qs(qs)
         if "url" in d:
             url = d["url"][0]
         else:

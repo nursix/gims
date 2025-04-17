@@ -53,6 +53,23 @@ def realm_entity(table, row):
         if organisation_id:
             realm_entity = s3db.pr_get_pe_id("org_organisation", organisation_id)
 
+    elif tablename == "act_activity_type":
+        # No realm entity
+        realm_entity = None
+
+    #elif tablename == "act_activity":
+    #    # Owned by the organisation registering them (default okay)
+    #    pass
+
+    elif tablename == "act_beneficiary":
+        # Inherit from person via person_id
+        table = s3db.table(tablename)
+        realm_entity = person_realm_entity(table, row, default=realm_entity)
+
+    #elif tablename in ("act_issue", "act_task"):
+    #    # Owned by the organisation managing them (default okay)
+    #    pass
+
     #elif tablename in ("dvr_case_flag",
     #                   "dvr_appointment_type",
     #                   "dvr_case_event_type",
@@ -103,6 +120,7 @@ def realm_entity(table, row):
                        "dvr_case_details",
                        "dvr_case_language",
                        "dvr_note",
+                       "dvr_task",
                        "dvr_residence_status",
                        "dvr_response_action",
                        "dvr_service_contact",
@@ -113,6 +131,7 @@ def realm_entity(table, row):
                        "pr_person_tag",
                        "cr_shelter_registration",
                        "cr_shelter_registration_history",
+                       "security_seized_item",
                        ):
         # Inherit from person via person_id
         table = s3db.table(tablename)
@@ -157,7 +176,9 @@ def realm_entity(table, row):
     #    # Self-owned, OU of managing organisation (default ok)
     #    pass
 
-    elif tablename == "cr_shelter_unit":
+    elif tablename in ("cr_shelter_unit",
+                       "cr_shelter_note",
+                       ):
         realm_entity = inherit_realm(tablename, row, "cr_shelter", "shelter_id")
 
     elif tablename in ("dvr_case_activity_status",
@@ -167,6 +188,7 @@ def realm_entity(table, row):
                        "dvr_response_type",
                        "dvr_service_contact_type",
                        "dvr_vulnerability_type",
+                       "pr_filter",
                        ):
         realm_entity = None
 
@@ -181,6 +203,33 @@ def realm_entity(table, row):
     #                   ):
     #    # Owned by the site, OU of managing organisation (default ok)
     #    pass
+
+    #elif tablename == "security_seized_item_depository":
+    #
+    #    # Owned by the managing organisation (default ok)
+    #    pass
+
+    #elif tablename in ("supply_catalog",
+    #                   "supply_distribution_set",
+    #                   "supply_distribution",
+    #                   ):
+    #    # Owned by the managing organisation (default ok)
+    #    pass
+
+    elif tablename in ("supply_item_category",
+                       "supply_catalog_item",
+                       ):
+        # Inherit from catalog via catalog_id
+        realm_entity = inherit_realm(tablename, row, "supply_catalog", "catalog_id")
+
+    elif tablename == "supply_distribution_set_item":
+        # Inherit from distribution set via distribution_set_id
+        realm_entity = inherit_realm(tablename, row, "supply_distribution_set", "distribution_set_id")
+
+
+    elif tablename == "supply_distribution_item":
+        # Inherit from distribution via distribution_id
+        realm_entity = inherit_realm(tablename, row, "supply_distribution", "distribution_id")
 
     return realm_entity
 
@@ -212,6 +261,10 @@ def doc_realm_entity(table, row):
 
     document = row[table]
     instance_type = row.doc_entity.instance_type
+
+    # Newsletter attachments do not belong to any realm
+    if instance_type == "cms_newsletter":
+        return None
 
     # Inherit the realm entity from instance, if available
     if document.doc_id and instance_type and instance_type != "pr_group":

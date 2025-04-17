@@ -15,7 +15,7 @@ application development on your computer.
 
 .. note::
 
-   This guide further assumes that you have *Python* (version 3.6 or later)
+   This guide further assumes that you have *Python* (version 3.9 or later)
    installed, which comes bundled with the *pip* package installer - and that
    you are familiar with the Python programming language.
 
@@ -66,12 +66,12 @@ To install web2py, clone it directly from GitHub:
    the clone - just remember to use the correct path in subsequent commands.
 
 Change into the *web2py* directory, and reset the repository (including
-all submodules) to the supported stable version (currently 2.24.1):
+all submodules) to the supported stable version (currently 2.27.1):
 
 .. code-block:: bash
 
    cd ~/web2py
-   git reset --hard 7685d373
+   git reset --hard 49bb23c4
    git submodule update --recursive
 
 Installing Eden ASP
@@ -81,7 +81,7 @@ To install Eden ASP, clone it directly from GitHub:
 
 .. code-block:: bash
 
-   git clone --recursive https://github.com/aqmaster/eden-asp.git ~/eden
+   git clone --recursive https://github.com/sahana/eden-asp.git ~/eden
 
 .. tip::
    You can of course choose any other target location than *~/eden* for
@@ -206,12 +206,12 @@ Once the server is running, it will give you a localhost URL to access it:
 
    web2py Web Framework
    Created by Massimo Di Pierro, Copyright 2007-2023
-   Version 2.24.1-stable+timestamp.2023.03.22.21.39.14
-   Database drivers available: sqlite3, MySQLdb, psycopg2, imaplib, pymysql, pyodbc
+   Version 2.27.1-stable+timestamp.2023.11.15.23.33.20
+   Database drivers available: sqlite3, psycopg2, imaplib, pymysql, pyodbc
 
    please visit:
            http://127.0.0.1:8000/
-   use "kill -SIGTERM 10921" to shutdown the web2py server
+   use "kill -SIGTERM 28254" to shutdown the web2py server
 
 Append the application name *eden* to the URL (http://127.0.0.1:8000/eden),
 and open that address in your web browser to access Eden ASP.

@@ -4,8 +4,6 @@
     License: MIT
 """
 
-import datetime
-
 from collections import OrderedDict
 
 from gluon import current
@@ -16,26 +14,31 @@ def config(settings):
 
     T = current.T
 
-    settings.base.system_name = "Refugion"
-    settings.base.system_name_short = "Refugion"
+    settings.base.system_name = "MRCMS"
+    settings.base.system_name_short = "MRCMS"
 
     # PrePopulate data
     settings.base.prepopulate += ("MRCMS",)
-    settings.base.prepopulate_demo += ("MRCMS/Demo",)
+    #settings.base.prepopulate_demo += ("MRCMS/Demo",)
 
     # Theme (folder to use for views/layout.html)
-    settings.base.theme = "JUH"
+    settings.base.theme = "MRCMS"
     settings.base.theme_config = "MRCMS"
     settings.base.theme_layouts = "MRCMS"
 
+    # Custom models/controllers
+    settings.base.models = "templates.MRCMS.models"
     settings.base.rest_controllers = {("counsel", "index"): None,
                                       ("counsel", "person"): ("pr", "person"),
                                       ("counsel", "group_membership"): ("pr", "group_membership"),
                                       ("counsel", "document"): ("doc", "document"),
+                                      ("counsel", "task"): ("dvr", "task"),
                                       ("counsel", "need"): ("dvr", "need"),
+                                      ("counsel", "response_action"): ("dvr", "response_action"),
                                       ("counsel", "response_type"): ("dvr", "response_type"),
                                       ("counsel", "response_theme"): ("dvr", "response_theme"),
                                       ("counsel", "vulnerability_type"): ("dvr", "vulnerability_type"),
+                                      ("supply", "person"): ("pr", "person"),
                                       }
 
     # Authentication settings
@@ -127,11 +130,21 @@ def config(settings):
     #
     settings.custom.autogenerate_case_ids = True
 
+    settings.custom.context_org_name = "Eden ASP"
+
+    settings.custom.org_menu_logo = ("MRCMS", "img", "eden_asp_small.png")
+    settings.custom.homepage_logo = ("MRCMS", "img", "eden_asp_large.png")
+    settings.custom.idcard_default_logo = ("MRCMS", "img", "eden_asp_small.png")
+
     # -------------------------------------------------------------------------
     # General UI settings
     #
     settings.ui.calendar_clear_icon = True
     settings.ui.auth_user_represent = "name"
+    settings.ui.datatables_responsive = False
+
+    # Do not pre-select family members for checkpoint registration
+    #settings.ui.checkpoint_multi_preselect_all = False
 
     # -------------------------------------------------------------------------
     # AUTH Settings
@@ -140,23 +153,42 @@ def config(settings):
                                 auth_user_resource
 
     settings.auth.privileged_roles = {"NEWSLETTER_AUTHOR": "ADMIN",
-                                      "SHELTER_ADMIN": ("ORG_GROUP_ADMIN", "SHELTER_ADMIN"),
-                                      "SHELTER_MANAGER": ("ORG_GROUP_ADMIN", "SHELTER_ADMIN"),
                                       "STAFF": ("ORG_GROUP_ADMIN", "ORG_ADMIN"),
                                       "CASE_ADMIN": "ORG_ADMIN",
                                       "CASE_MANAGER": "ORG_ADMIN",
                                       "SECURITY": "ORG_ADMIN",
+                                      "CATERING": "ORG_ADMIN",
+                                      "ISSUE_REPORTER": "ORG_ADMIN",
+                                      "SHELTER_ADMIN": ("ORG_GROUP_ADMIN", "SHELTER_ADMIN"),
+                                      "SHELTER_MANAGER": ("ORG_GROUP_ADMIN", "SHELTER_ADMIN"),
+                                      "SUPPLY_ADMIN": ("ORG_GROUP_ADMIN", "SUPPLY_ADMIN"),
+                                      "SUPPLY_MANAGER": ("ORG_GROUP_ADMIN", "SUPPLY_ADMIN"),
                                       # These are restricted for now until better-defined
                                       "CASE_ASSISTANT": "ADMIN",
                                       "QUARTERMASTER": "ADMIN",
                                       "JANITOR": "ADMIN",
                                       "CHECKPOINT": "ADMIN",
-                                      "CATERING": "ADMIN",
                                       }
 
     settings.auth.realm_entity = realm_entity
     settings.auth.registration_roles = {None: ["STAFF"]}
     settings.customise_auth_user_resource = auth_user_resource
+
+    # -------------------------------------------------------------------------
+    # ACT Settings and Customizations
+    from .customise.act import act_activity_resource, \
+                               act_activity_controller, \
+                               act_beneficiary_resource, \
+                               act_issue_controller, \
+                               act_task_controller
+
+    settings.customise_act_activity_resource = act_activity_resource
+    settings.customise_act_activity_controller = act_activity_controller
+    settings.customise_act_beneficiary_resource = act_beneficiary_resource
+    settings.customise_act_issue_controller = act_issue_controller
+    settings.customise_act_task_controller = act_task_controller
+
+    settings.act.issue_site_type = "cr_shelter"
 
     # -------------------------------------------------------------------------
     # CMS Settings and Customizations
@@ -201,7 +233,8 @@ def config(settings):
                               cr_shelter_unit_resource, \
                               cr_shelter_unit_controller, \
                               cr_shelter_registration_resource, \
-                              cr_shelter_registration_controller
+                              cr_shelter_registration_controller, \
+                              cr_shelter_registration_history_resource
 
     settings.customise_cr_shelter_resource = cr_shelter_resource
     settings.customise_cr_shelter_controller = cr_shelter_controller
@@ -209,10 +242,27 @@ def config(settings):
     settings.customise_cr_shelter_unit_controller = cr_shelter_unit_controller
     settings.customise_cr_shelter_registration_resource = cr_shelter_registration_resource
     settings.customise_cr_shelter_registration_controller = cr_shelter_registration_controller
+    settings.customise_cr_shelter_registration_history_resource = cr_shelter_registration_history_resource
 
     # -------------------------------------------------------------------------
     # DOC Settings and Customizations
     #
+    from .helpers import user_mailmerge_fields, shelter_mailmerge_fields
+
+    settings.doc.mailmerge_fields = {"ID": "pe_label",
+                                     "Vorname": "first_name",
+                                     "Name": "last_name",
+                                     "Geburtsdatum": "date_of_birth",
+                                     "Land": "person_details.nationality",
+                                     "Registrierungsdatum": "dvr_case.date",
+                                     "Organisation": "dvr_case.organisation_id$name",
+                                     "BAMF-Az": "bamf.value",
+                                     "Auftraggeber-Az": "dvr_case.reference",
+                                     "Unterkunft": shelter_mailmerge_fields,
+                                     "Benutzername": "current_user.name",
+                                     "Benutzer": user_mailmerge_fields,
+                                     }
+
     from .customise.doc import doc_document_resource, \
                                doc_document_controller, \
                                doc_image_resource
@@ -229,7 +279,25 @@ def config(settings):
     # Uncomment this to enable household size in cases, set to "auto" for automatic counting
     settings.dvr.household_size = "auto"
 
-    settings.dvr.case_include_activity_docs = False
+    # Most commonly documented case languages
+    settings.dvr.case_languages = ('aa', 'am', 'anp', 'as', 'az', 'bal', 'bg', 'bho', 'bn',
+                                   'bs', 'cs', 'da', 'de', 'el', 'en', 'es', 'et', 'fa',
+                                   'fi', 'fil', 'fr', 'ga', 'gu', 'ha', 'hi', 'hmn', 'hr',
+                                   'hu', 'hy', 'id', 'ig', 'it', 'ja', 'jv', 'ka', 'km',
+                                   'kn', 'ko', 'ku', 'lo', 'lt', 'lv', 'mai', 'mk', 'ml',
+                                   'mlt', 'mn', 'mr', 'my', 'nl', 'om', 'pa', 'pl', 'prs',
+                                   'ps', 'pt', 'ro', 'rom', 'ru', 'rup', 'sd', 'si', 'sk',
+                                   'sl', 'so', 'sq', 'sr', 'sv', 'sw', 'ta', 'te', 'th',
+                                   'ti', 'tk', 'tl', 'tr', 'uk', 'ur', 'uz', 'vi', 'yo',
+                                   'zh', 'ab', 'af', 'ak', 'an', 'ar', 'bem', 'cop', 'cr',
+                                   'dak', 'del', 'din', 'gaa', 'kaw', 'kg', 'kho', 'kpe',
+                                   'kru', 'kum', 'kv', 'kw', 'ky', 'lez', 'mdr', 'mis',
+                                   'new', 'nso', 'nzi', 'pau', 'pi', 'raj', 'rm', 'rn',
+                                   'rw', 'sm', 'sn', 'snk', 'srn', 'su', 'syr', 'tig',
+                                   'tog', 'tsi', 'tw', 'umb', 'zza',
+                                   )
+
+    settings.dvr.case_include_activity_docs = True
     settings.dvr.case_include_group_docs = True
 
     # Manage case flags
@@ -243,13 +311,17 @@ def config(settings):
     settings.dvr.event_registration_checkin_warning = True
     # Case events can close appointments
     settings.dvr.case_events_close_appointments = True
+    # Case events can register activities
+    settings.dvr.case_events_register_activities = True
     # Exclude FOOD and SURPLUS-MEALS events from event registration
     settings.dvr.event_registration_exclude_codes = ("FOOD*",)
 
+    # Use date+time (start/end) in appointments
+    settings.dvr.appointments_use_time = True
     # Use org-specific appointment types
     settings.dvr.appointment_types_org_specific = True
     # Appointments can be marked as mandatory
-    settings.dvr.mandatory_appointments = True
+    settings.dvr.mandatory_appointments = False
     # Appointments update last-seen-on when completed
     settings.dvr.appointments_update_last_seen_on = True
     # Appointments update case status when completed
@@ -277,7 +349,7 @@ def config(settings):
     # Disable follow-up fields in case activities
     settings.dvr.case_activity_follow_up = False
     # Allow uploading of documents in individual case activities
-    #settings.dvr.case_activity_documents = True
+    settings.dvr.case_activity_documents = True
 
     # Manage individual response actions in case activities
     settings.dvr.manage_response_actions = True
@@ -315,8 +387,11 @@ def config(settings):
 
     from .customise.dvr import dvr_home, \
                                dvr_case_resource, \
+                               dvr_need_resource, \
                                dvr_case_activity_resource, \
                                dvr_case_activity_controller, \
+                               dvr_response_action_resource, \
+                               dvr_response_action_controller, \
                                dvr_case_appointment_resource, \
                                dvr_case_appointment_controller, \
                                dvr_case_event_resource, \
@@ -326,13 +401,16 @@ def config(settings):
                                dvr_case_event_type_controller, \
                                dvr_case_flag_controller, \
                                dvr_note_resource, \
-                               dvr_service_contact_resource, \
-                               dvr_site_activity_resource
+                               dvr_task_controller, \
+                               dvr_service_contact_resource
 
     settings.customise_dvr_home = dvr_home
     settings.customise_dvr_case_resource = dvr_case_resource
+    settings.customise_dvr_need_resource = dvr_need_resource
     settings.customise_dvr_case_activity_resource = dvr_case_activity_resource
     settings.customise_dvr_case_activity_controller = dvr_case_activity_controller
+    settings.customise_dvr_response_action_resource = dvr_response_action_resource
+    settings.customise_dvr_response_action_controller = dvr_response_action_controller
     settings.customise_dvr_case_appointment_resource = dvr_case_appointment_resource
     settings.customise_dvr_case_appointment_controller = dvr_case_appointment_controller
     settings.customise_dvr_case_event_resource = dvr_case_event_resource
@@ -344,8 +422,8 @@ def config(settings):
     settings.customise_dvr_case_flag_controller = dvr_case_flag_controller
 
     settings.customise_dvr_note_resource = dvr_note_resource
+    settings.customise_dvr_task_controller = dvr_task_controller
     settings.customise_dvr_service_contact_resource = dvr_service_contact_resource
-    settings.customise_dvr_site_activity_resource = dvr_site_activity_resource
 
     # -------------------------------------------------------------------------
     # Human Resource Module Settings
@@ -441,55 +519,35 @@ def config(settings):
 
 
     # -------------------------------------------------------------------------
-    # Security settings
+    # Supply module settings
     #
-    from .customise.security import security_seized_item_resource
+    settings.supply.generic_items = True
+    settings.supply.kits = False
+    settings.supply.track_pack_values = False
+    settings.supply.track_pack_dimensions = False
 
-    settings.customise_security_seized_item_resource = security_seized_item_resource
+    from .customise.supply import supply_distribution_set_controller, \
+                                  supply_distribution_resource, \
+                                  supply_distribution_controller, \
+                                  supply_distribution_item_resource, \
+                                  supply_item_resource, \
+                                  supply_item_controller
+
+    settings.customise_supply_distribution_set_controller = supply_distribution_set_controller
+    settings.customise_supply_distribution_resource = supply_distribution_resource
+    settings.customise_supply_distribution_controller = supply_distribution_controller
+    settings.customise_supply_distribution_item_resource = supply_distribution_item_resource
+    settings.customise_supply_item_resource = supply_item_resource
+    settings.customise_supply_item_controller = supply_item_controller
 
     # -------------------------------------------------------------------------
-    def org_site_check(site_id):
-        """ Custom tasks for scheduled site checks """
+    # Security settings
+    #
+    from .customise.security import security_seized_item_resource, \
+                                    security_seized_item_depository_controller
 
-        # Update transferability
-        from .controllers import update_transferability
-        result = update_transferability(site_id=site_id)
-
-        # Log the result
-        msg = "Update Transferability: " \
-              "%s transferable cases found for site %s" % (result, site_id)
-        current.log.info(msg)
-
-        # Check whether we have a site activity report for yesterday
-        YESTERDAY = current.request.utcnow.date() - datetime.timedelta(1)
-        rtable = current.s3db.dvr_site_activity
-        query = (rtable.date == YESTERDAY) & \
-                (rtable.site_id == site_id) & \
-                (rtable.deleted != True)
-        row = current.db(query).select(rtable.id,
-                                       limitby = (0, 1)
-                                       ).first()
-        if not row:
-            # Create one
-            from .helpers import MRCMSSiteActivityReport
-            report = MRCMSSiteActivityReport(date = YESTERDAY,
-                                           site_id = site_id,
-                                           )
-            # Temporarily override authorization,
-            # otherwise the report would be empty
-            auth = current.auth
-            auth.override = True
-            try:
-                record_id = report.store()
-            except:
-                record_id = None
-            auth.override = False
-            if record_id:
-                current.log.info("Residents Report created, record ID=%s" % record_id)
-            else:
-                current.log.error("Could not create Residents Report")
-
-    settings.org.site_check = org_site_check
+    settings.customise_security_seized_item_resource = security_seized_item_resource
+    settings.customise_security_seized_item_depository_controller = security_seized_item_depository_controller
 
     # -------------------------------------------------------------------------
     # Comment/uncomment modules here to disable/enable them
@@ -541,10 +599,10 @@ def config(settings):
             module_type = 1
         )),
         ("hrm", Storage(
-           name_nice = T("Staff"),
-           #description = "Human Resources Management",
-           restricted = True,
-           module_type = 2,
+            name_nice = T("Staff"),
+            #description = "Human Resources Management",
+            restricted = True,
+            module_type = 2,
         )),
         #("vol", Storage(
         #   name_nice = T("Volunteers"),
@@ -553,16 +611,16 @@ def config(settings):
         #   module_type = 2,
         #)),
         ("cms", Storage(
-         name_nice = T("Content Management"),
-        #description = "Content Management System",
-         restricted = True,
-         module_type = 10,
+            name_nice = T("Content Management"),
+            #description = "Content Management System",
+            restricted = True,
+            module_type = 10,
         )),
         ("doc", Storage(
-           name_nice = T("Documents"),
-           #description = "A library of digital resources, such as photos, documents and reports",
-           restricted = True,
-           module_type = 10,
+            name_nice = T("Documents"),
+            #description = "A library of digital resources, such as photos, documents and reports",
+            restricted = True,
+            module_type = 10,
         )),
         #("msg", Storage(
         #   name_nice = T("Messaging"),
@@ -571,12 +629,12 @@ def config(settings):
         #   # The user-visible functionality of this module isn't normally required. Rather it's main purpose is to be accessed from other modules.
         #   module_type = None,
         #)),
-        #("supply", Storage(
-        #   name_nice = T("Supply Chain Management"),
-        #   #description = "Used within Inventory Management, Request Management and Asset Management",
-        #   restricted = True,
-        #   module_type = None, # Not displayed
-        #)),
+        ("supply", Storage(
+            name_nice = T("Supply Chain Management"),
+            #description = "Used within Inventory Management, Request Management and Asset Management",
+            restricted = True,
+            module_type = None, # Not displayed
+        )),
         #("inv", Storage(
         #   name_nice = T("Warehouses"),
         #   #description = "Receiving and Sending Items",
@@ -595,6 +653,12 @@ def config(settings):
         #   restricted = True,
         #   module_type = 10,
         #)),
+        ("act", Storage(
+            name_nice = T("Activities"),
+            #description = "Management of Organization Activities",
+            restricted = True,
+            module_type = 10,
+        )),
         #("project", Storage(
         #   name_nice = T("Projects"),
         #   #description = "Tracking of Projects, Activities and Tasks",
@@ -608,14 +672,19 @@ def config(settings):
             module_type = 10
         )),
         ("dvr", Storage(
-          name_nice = T("Clients"),
-          restricted = True,
-          module_type = 10,
+            name_nice = T("Clients"),
+            restricted = True,
+            module_type = 10,
         )),
         ("counsel", Storage(
-          name_nice = T("Counseling"),
-          restricted = True,
-          module_type = 10,
+            name_nice = T("Counseling"),
+            restricted = True,
+            module_type = 10,
+        )),
+        ("med", Storage(
+            name_nice = T("Medical Journal"),
+            #description = "Emergency Medical Journal",
+            module_type = None, # No menu entry
         )),
         #("event", Storage(
         #   name_nice = T("Events"),
@@ -624,16 +693,16 @@ def config(settings):
         #   module_type = 10,
         #)),
         ("security", Storage(
-           name_nice = T("Security"),
-           restricted = True,
-           module_type = 10,
+            name_nice = T("Security"),
+            restricted = True,
+            module_type = 10,
         )),
-        #("stats", Storage(
-        #   name_nice = T("Statistics"),
-        #   #description = "Manages statistics",
-        #   restricted = True,
-        #   module_type = None,
-        #)),
+        ("stats", Storage(
+            name_nice = T("Statistics"),
+            #description = "Manages statistics",
+            restricted = True,
+            module_type = None,
+        )),
     ])
 
 # END =========================================================================

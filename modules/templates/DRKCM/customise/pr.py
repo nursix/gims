@@ -157,10 +157,10 @@ def pr_person_resource(r, tablename):
         if r.name == "person" and not r.component:
 
             # Configure anonymize-method
-            from core import S3Anonymize
+            from core import Anonymize
             s3db.set_method("pr_person",
                             method = "anonymize",
-                            action = S3Anonymize,
+                            action = Anonymize,
                             )
 
             # Configure anonymize-rules
@@ -170,15 +170,9 @@ def pr_person_resource(r, tablename):
                            )
 
             if current.auth.s3_has_role("CASE_MANAGEMENT"):
-                # Allow use of Document Templates
-                s3db.set_method("pr_person",
-                                method = "templates",
-                                action = s3db.pr_Templates(),
-                                )
-                s3db.set_method("pr_person",
-                                method = "template",
-                                action = s3db.pr_Template(),
-                                )
+
+                from core import GenerateDocument
+                GenerateDocument.configure("pr_person")
 
     # Configure components to inherit realm_entity from person record
     pr_person_set_realm_components()
@@ -466,7 +460,7 @@ def pr_person_controller(**attr):
                     field.default = None
                     options = dict(s3db.pr_gender_opts)
                     del options[1] # Remove "unknown"
-                    field.requires = IS_PERSON_GENDER(options, sort = True)
+                    field.requires = IS_PERSON_GENDER(options, sort=True)
 
                     # Last name is required
                     field = table.last_name
@@ -603,6 +597,15 @@ def pr_person_controller(**attr):
                         (T("Invalid"), "dvr_case.archived"),
                         )
 
+                    # Subheadings for case form
+                    person_details = "pe_label" if pe_label else "last_name"
+                    subheadings = {
+                        "dvr_case_date": T("Case Status"),
+                        person_details: T("Person Details"),
+                        "phonecontact": T("Other Details"),
+                        "dvr_case_archived": T("File Status"),
+                        }
+
                     # Custom filter widgets
 
                     # Extract case status options from original filter widget
@@ -689,6 +692,7 @@ def pr_person_controller(**attr):
                             OptionsFilter("dvr_case.organisation_id"))
 
                     configure(crud_form = crud_form,
+                              subheadings = subheadings,
                               filter_widgets = filter_widgets,
                               )
 
@@ -713,6 +717,13 @@ def pr_person_controller(**attr):
                 if ui_options_get("appointments_use_organizer") and \
                     r.interactive and r.method is None and not r.component_id:
                     r.method = "organize"
+
+            elif r.component_name == "case_activity":
+
+                # Reconfigure dvr_case_activity
+                # - overriding some default prep modifications
+                from .dvr import configure_case_activity
+                configure_case_activity(r)
 
             elif r.component_name == "response_action":
 
@@ -793,13 +804,11 @@ def pr_person_controller(**attr):
             else:
                 buttons = output["buttons"]
 
-
-
             if not r.component and r.method in (None, "update", "read"):
 
                 # Anonymize-button
-                from core import S3AnonymizeWidget
-                anonymize = S3AnonymizeWidget.widget(r, _class="action-btn anonymize-btn")
+                from core import AnonymizeWidget
+                anonymize = AnonymizeWidget.widget(r, _class="action-btn anonymize-btn")
 
                 # Doc-From-Template-button
                 if ui_options_get("case_document_templates") and \

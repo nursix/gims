@@ -29,6 +29,11 @@ def config(settings):
     settings.base.theme_layouts = "DRKCM"
     settings.base.theme_config = "DRKCM"
 
+    # Custom models/controllers
+    settings.base.models = "templates.DRKCM.models"
+    settings.base.rest_controllers = {("dvr", "diagnosis"): ("dvr", "diagnosis"),
+                                      }
+
     # Authentication settings
     # Should users be allowed to register themselves?
     settings.security.self_registration = False
@@ -290,6 +295,7 @@ def config(settings):
                                dvr_response_action_resource, \
                                dvr_response_action_controller, \
                                dvr_response_theme_resource, \
+                               dvr_response_type_resource, \
                                dvr_service_contact_resource, \
                                dvr_vulnerability_resource
 
@@ -310,6 +316,7 @@ def config(settings):
     settings.customise_dvr_response_action_resource = dvr_response_action_resource
     settings.customise_dvr_response_action_controller = dvr_response_action_controller
     settings.customise_dvr_response_theme_resource = dvr_response_theme_resource
+    settings.customise_dvr_response_type_resource = dvr_response_type_resource
 
     settings.customise_dvr_service_contact_resource = dvr_service_contact_resource
 

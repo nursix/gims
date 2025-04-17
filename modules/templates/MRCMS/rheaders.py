@@ -4,11 +4,49 @@
     License: MIT
 """
 
-from gluon import current, A, I, URL, SPAN
+from gluon import current, A, DIV, I, URL, SPAN
 
 from core import S3ResourceHeader, s3_fullname, s3_rheader_resource
 
-from .helpers import hr_details
+from .helpers import client_name_age, hr_details, last_seen_represent
+
+# =============================================================================
+def act_rheader(r, tabs=None):
+    """ Custom resource headers for ACT module """
+
+    if r.representation != "html":
+        # Resource headers only used in interactive views
+        return None
+
+    tablename, record = s3_rheader_resource(r)
+    if tablename != r.tablename:
+        resource = current.s3db.resource(tablename, id=record.id)
+    else:
+        resource = r.resource
+
+    rheader = None
+    rheader_fields = []
+
+    if record:
+
+        T = current.T
+
+        if tablename == "act_activity":
+            if not tabs:
+                tabs = [(T("Basic Details"), None),
+                        (T("Participants"), "beneficiary"),
+                        (T("Documents"), "document"),
+                        ]
+            rheader_fields = [["type_id", "place"],
+                              ["date", "time"],
+                              ["end_date"],
+                              ]
+            rheader_title = "name"
+
+            rheader = S3ResourceHeader(rheader_fields, tabs, title=rheader_title)
+            rheader = rheader(r, table=resource.table, record=record)
+
+    return rheader
 
 # =============================================================================
 def dvr_rheader(r, tabs=None):
@@ -30,6 +68,7 @@ def dvr_rheader(r, tabs=None):
 
     rheader = None
     rheader_fields = []
+    rheader_title = None
 
     if record:
         T = current.T
@@ -54,53 +93,50 @@ def dvr_rheader(r, tabs=None):
 
             else:
                 if not tabs:
-                    tabs = [# Common
-                            (T("Basic Details"), None),
-                            (T("Family Members"), "group_membership/"),
-                            # identity
-                            (T("Appointments"), "case_appointment"),
-
-                            # Counsel only:
-                            # vulnerability
-                            # case_activity
-                            # response_action
-
-                            # Case Administration only:
-                            # case_event
-                            # site_presence
-                            # image
-                            # seized_item
-
-                            # Both
-                            # "document"
-                            # "case_note"
+                    tabs = [(T("Basic Details"), None),
                             ]
 
                     has_roles = current.auth.s3_has_roles
                     if c == "counsel":
+                        # Counseling Perspective
+                        tabs.append((T("Family Members"), "group_membership/"))
                         if has_roles(("CASE_ADMIN", "CASE_MANAGER")):
-                            tabs.extend([(T("Vulnerabilities"), "vulnerability"),
+                            tabs.extend([(T("Appointments"), "case_appointment"),
+                                         (T("Tasks"), "case_task"),
+                                         (T("Vulnerabilities"), "vulnerability"),
                                          (T("Needs"), "case_activity"),
                                          (T("Measures"), "response_action"),
                                          ])
+                        tabs.extend([(T("Documents"), "document/"),
+                                     (T("Notes"), "case_note"),
+                                     ])
+
+                    elif c == "supply":
+                        # Supply Perspective
+                        tabs.extend([(T("Items Received"), "distribution_item"),
+                                     ])
+
                     else:
-                        tabs[2:2] = [(T("ID"), "identity"),
+                        # Management Perspective
+                        tabs.extend([(T("Family Members"), "group_membership/"),
+                                     (T("ID"), "identity"),
                                      (T("Service Contacts"), "service_contact"),
-                                     ]
+                                     (T("Appointments"), "case_appointment"),
+                                     ])
                         if has_roles(("CASE_ADMIN",)):
-                            tabs.append((T("Events"), "case_event"))
+                            tabs.extend([(T("Tasks"), "case_task"),
+                                         (T("Events"), "case_event"),
+                                         ])
                         if has_roles(("SHELTER_ADMIN", "SHELTER_MANAGER")):
                             tabs.append((T("Presence"), "site_presence_event"))
                         tabs.extend([(T("Photos"), "image"),
-                                     #(T("Confiscation"), "seized_item"),
+                                     (T("Documents"), "document/"),
+                                     (T("Notes"), "case_note"),
                                      ])
-
-                    tabs.extend([(T("Documents"), "document/"),
-                                 (T("Notes"), "case_note"),
-                                 ])
 
                 case = resource.select(["dvr_case.status_id",
                                         "dvr_case.archived",
+                                        "dvr_case.reference",
                                         "dvr_case.household_size",
                                         #"dvr_case.transferable",
                                         "dvr_case.last_seen_on",
@@ -120,6 +156,7 @@ def dvr_rheader(r, tabs=None):
                     case = case[0]
                     raw = case["_row"]
 
+                    case_reference = lambda row: case["dvr_case.reference"]
                     nationality_label = case["pr_person_details.nationality"]
                     nationality = lambda row: SPAN(raw["pr_person_details.nationality"],
                                                    _title = nationality_label,
@@ -137,54 +174,64 @@ def dvr_rheader(r, tabs=None):
                         shelter = lambda row: A(shelter_name, _href=shelter_url)
                     else:
                         shelter = lambda row: shelter_name
-
                     unit = lambda row: case["cr_shelter_registration.shelter_unit_id"]
-                    last_seen_on = lambda row: case["dvr_case.last_seen_on"]
 
-                    # TODO reinstate when fixed
-                    #absence = lambda row: case["pr_person.absence"]
+                    # Represent last-seen-date as warning, if too long ago
+                    last_seen_on = lambda row: \
+                                   last_seen_represent(raw["dvr_case.last_seen_on"],
+                                                       case["dvr_case.last_seen_on"],
+                                                       )
                 else:
                     # Target record exists, but doesn't match filters
                     return None
 
-                # TODO Refactor:
-                # - presence and shelter information only if the organisation has a shelter
-                # - presence and last_seen_on requires privileged role
                 rheader_fields = [[(T("ID"), "pe_label"),
-                                   (T("Case Status"), case_status),
+                                   (T("Principal Ref.No."), case_reference),
                                    (T("Shelter"), shelter),
                                    ],
                                   ["date_of_birth",
-                                   (T("Size of Family"), household_size),
+                                   (T("Case Status"), case_status),
                                    (T("Housing Unit"), unit),
                                    ],
                                   [(T("Nationality"), nationality),
-                                   ("", None), #(T("Absent##presence"), absence),
+                                   (T("Size of Family"), household_size),
                                    (T("Last seen on"), last_seen_on),
                                    ],
                                   ]
 
-                icon = link = None
                 if raw["dvr_case.archived"]:
                     rheader_fields.insert(0, [(None, hint)])
-
-                # Link to switch case file perspective
-                elif c == "dvr" and \
-                     has_permission("read", "pr_person", c="counsel", f="person", record_id=record.id):
-                    icon = "arrow-circle-right"
-                    link = A(T("Counseling"), _href=URL(c="counsel", f="person", args=[record.id]))
-                elif c == "counsel" and \
-                     has_permission("read", "pr_person", c="dvr", f="person", record_id=record.id):
+                    links = None
+                else:
+                    # Link to switch case file perspective
+                    links = DIV(_class="case-file-perspectives")
+                    render_switch = False
+                    record_id = record.id
+                    perspectives = (("dvr", T("Manage")),
+                                    ("counsel", T("Counseling")),
+                                    ("supply", T("Supply")),
+                                    )
                     icon = "arrow-circle-left"
-                    link = A(T("Manage"), _href=URL(c="dvr", f="person", args=[record.id]))
-                if link:
-                    # TODO move CSS into theme
-                    link.insert(0, I(_class = "fa fa-%s" % icon,
-                                     _style = "margin-right:0.3rem;vertical-align:middle;",
-                                     ))
-                    rheader_fields.append([(None, lambda item: link, 6)])
+                    for cntr, label in perspectives:
+                        if c == cntr:
+                            link = SPAN(I(_class = "fa fa-arrow-circle-down"),
+                                        label,
+                                        _class="current-perspective",
+                                        )
+                            icon = "arrow-circle-right"
+                        elif has_permission("read", "pr_person", c=cntr, f="person", record_id=record_id):
+                            render_switch = True
+                            link = A(I(_class = "fa fa-%s" % icon),
+                                     label,
+                                     _href = URL(c=cntr, f="person", args=[record_id]),
+                                     )
+                        else:
+                            continue
+                        links.append(link)
+                    if not render_switch:
+                        links = None
 
-                rheader_title = s3_fullname
+                rheader_title = client_name_age
 
                 # Generate rheader XML
                 rheader = S3ResourceHeader(rheader_fields, tabs, title=rheader_title)
@@ -193,6 +240,7 @@ def dvr_rheader(r, tabs=None):
                 # Add profile picture
                 from core import s3_avatar_represent
                 record_id = record.id
+                # TODO this should only be a link in Manage-perspective
                 rheader.insert(0, A(s3_avatar_represent(record_id,
                                                         "pr_person",
                                                         _class = "rheader-avatar",
@@ -204,12 +252,25 @@ def dvr_rheader(r, tabs=None):
                                     )
                                )
 
+                # Insert perspective switch
+                if links:
+                    rheader.insert(0, links)
+
                 return rheader
 
-        rheader = S3ResourceHeader(rheader_fields, tabs)(r,
-                                                         table=resource.table,
-                                                         record=record,
-                                                         )
+        elif tablename == "dvr_task":
+
+            if not tabs:
+                tabs = [(T("Basic Details"), None),
+                        ]
+
+            rheader_fields = [[(T("Client"), "person_id"), (T("Staff"), "human_resource_id")],
+                              ["status", "due_date"],
+                              ]
+            rheader_title = "name"
+
+        rheader = S3ResourceHeader(rheader_fields, tabs, title=rheader_title)
+        rheader = rheader(r, table=resource.table, record=record)
 
     return rheader
 
@@ -248,13 +309,19 @@ def org_rheader(r, tabs=None):
         elif tablename == "org_organisation":
 
             if not tabs:
+                # General tabs
                 tabs = [(T("Basic Details"), None),
                         #(T("Offices"), "office"),
-                        #(T("Staff"), "human_resource"),
-                        (T("Documents"), "document"),
                         ]
+
+                # Role/permission-dependent tabs
                 if auth.s3_has_permission("read", "pr_person", c="hrm", f="person"):
-                    tabs.insert(-1, (T("Staff"), "human_resource"))
+                    tabs.append((T("Staff"), "human_resource"))
+
+                # Documents tabs
+                tabs += [(T("Documents"), "document"),
+                         #(T("Templates"), "template"),
+                         ]
 
             rheader_fields = []
             rheader_title = "name"
@@ -302,6 +369,7 @@ def cr_rheader(r, tabs=None):
                 tabs = [(T("Basic Details"), None, {}, "read"),
                         (T("Overview"), "overview"),
                         (T("Housing Units"), "shelter_unit"),
+                        (T("Journal"), "shelter_note"),
                         (T("Images"), "image"),
                         (T("Documents"), "document"),
                         ]
@@ -410,6 +478,40 @@ def default_rheader(r, tabs=None):
                     ]
             rheader_fields = []
             rheader_title = s3_fullname
+
+            rheader = S3ResourceHeader(rheader_fields, tabs, title=rheader_title)
+            rheader = rheader(r, table=resource.table, record=record)
+
+    return rheader
+
+# -----------------------------------------------------------------------------
+def security_rheader(r, tabs=None):
+    """ Custom resource header for SECURITY module """
+
+    if r.representation != "html":
+        # Resource headers only used in interactive views
+        return None
+
+    tablename, record = s3_rheader_resource(r)
+    if tablename != r.tablename:
+        resource = current.s3db.resource(tablename, id=record.id)
+    else:
+        resource = r.resource
+
+    rheader = None
+    rheader_fields = []
+
+    if record:
+
+        T = current.T
+
+        if tablename == "security_seized_item_depository":
+            if not tabs:
+                tabs = [(T("Basic Details"), None),
+                        (T("Seized Items"), "seized_item"),
+                        ]
+            rheader_fields = []
+            rheader_title = "name"
 
             rheader = S3ResourceHeader(rheader_fields, tabs, title=rheader_title)
             rheader = rheader(r, table=resource.table, record=record)

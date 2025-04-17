@@ -139,11 +139,11 @@ def staff():
                                                      T("The facility where this position is based."),
                                                      #messages.AUTOCOMPLETE_HELP,
                                             )))
-                    #field.comment = S3PopupLink(c="org", f="facility",
-                    #                            vars = dict(child="site_id",
-                    #                                        parent="req"),
-                    #                            title=T("Add New Site"),
-                    #                            )
+                    #field.comment = PopupLink(c="org", f="facility",
+                    #                          vars = dict(child="site_id",
+                    #                                      parent="req"),
+                    #                          title=T("Add New Site"),
+                    #                          )
 
                     # Hide status field
                     table.status.writable = table.status.readable = False
@@ -173,9 +173,6 @@ def staff():
                                     ),
                          "_class": "action-btn send",
                          })
-                #s3.scripts.append("/%s/static/scripts/jquery.doubleScroll.js" % appname)
-                #s3.jquery_ready.append('''$('.dataTable_table').doubleScroll()''')
-                #s3.jquery_ready.append('''$('.dataTables_wrapper').doubleScroll()''')
         elif r.representation == "plain":
             # Map Popups
             output = s3db.hrm_map_popup(r)
@@ -630,6 +627,8 @@ def competency():
         - used to allow searching for people by Skill
         - used for options.s3json lookups
     """
+
+    from core import S3PersonAutocompleteWidget
 
     s3.filter = FS("person_id$human_resource.type") == 1
 
