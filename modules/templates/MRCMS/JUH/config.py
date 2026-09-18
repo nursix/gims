@@ -6,16 +6,16 @@
 
 from collections import OrderedDict
 
-from gluon import current
-from gluon.storage import Storage
+# from gluon import current
+# from gluon.storage import Storage
 
 # =============================================================================
 def config(settings):
 
-    T = current.T
+    # T = current.T
 
-    settings.base.system_name = "Refugion"
-    settings.base.system_name_short = "Refugion"
+    #settings.base.system_name = "MRCMS"
+    #settings.base.system_name_short = "MRCMS"
 
     # PrePopulate data
     settings.base.prepopulate += ("MRCMS/JUH",)
@@ -39,9 +39,10 @@ def config(settings):
     settings.L10n.timezone = "Europe/Berlin"
 
     # -------------------------------------------------------------------------
-    # Defaults for custom settings
+    # Scenario-specific custom settings
     #
     settings.custom.autogenerate_case_ids = True
+    settings.custom.manage_work_orders = True
 
     settings.custom.context_org_name = "Johanniter-Unfall-Hilfe"
 

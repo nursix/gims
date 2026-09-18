@@ -56,7 +56,6 @@
          Home Phone.....................optional.....home phone number
          Office Phone...................optional.....office phone number
          Skype..........................optional.....person skype ID
-         Twitter........................optional.....person Twitter handle
          Callsign.......................optional.....person Radio Callsign
          Emergency Contact Name.........optional.....pr_contact_emergency name
          Emergency Contact Relationship.optional.....pr_contact_emergency relationship
@@ -86,6 +85,8 @@
          Year...........................optional.....person education year
          Institute......................optional.....person education institute
          Photo..........................optional.....pr_image.image (URL to remote server to download)
+         TC Acceptance..................optional.....person has accepted terms and conditions
+                                                     dvr_case.tc_signed (Y|N|N/A)
 
          Column headers looked up in labels.xml:
 
@@ -234,6 +235,7 @@
         <xsl:variable name="FacilityType" select="col[@field='Facility Type']/text()"/>
         <xsl:variable name="Illiterate" select="col[@field='Illiterate']/text()"/>
         <xsl:variable name="MaritalStatus" select="col[@field='Marital Status']/text()"/>
+        <xsl:variable name="TC" select="col[@field='TC Acceptance']/text()"/>
 
         <xsl:variable name="gender">
             <xsl:call-template name="GetColumnValue">
@@ -248,6 +250,25 @@
         </xsl:variable>
 
         <resource name="pr_person">
+
+            <!-- Person record -->
+            <data field="pe_label"><xsl:value-of select="col[@field='Label']/text()"/></data>
+            <data field="first_name"><xsl:value-of select="col[@field='First Name']/text()"/></data>
+            <xsl:if test="col[@field='Middle Name']/text()!=''">
+                <data field="middle_name"><xsl:value-of select="col[@field='Middle Name']/text()"/></data>
+            </xsl:if>
+            <data field="last_name"><xsl:value-of select="col[@field='Last Name']/text()"/></data>
+            <xsl:if test="col[@field='Initials']/text()!=''">
+                <data field="initials"><xsl:value-of select="col[@field='Initials']/text()"/></data>
+            </xsl:if>
+            <xsl:if test="col[@field='DOB']/text()!=''">
+                <data field="date_of_birth"><xsl:value-of select="col[@field='DOB']/text()"/></data>
+            </xsl:if>
+            <xsl:if test="$gender!=''">
+                <data field="gender">
+                    <xsl:attribute name="value"><xsl:value-of select="$gender"/></xsl:attribute>
+                </data>
+            </xsl:if>
 
             <!-- Case record -->
             <resource name="dvr_case">
@@ -264,6 +285,11 @@
                             <xsl:value-of select="concat('Status:',col[@field='CaseStatus'])"/>
                         </xsl:attribute>
                     </reference>
+                </xsl:if>
+                <xsl:if test="$TC!=''">
+                    <data field="tc_signed">
+                        <xsl:attribute name="value"><xsl:value-of select="$TC"/></xsl:attribute>
+                    </data>
                 </xsl:if>
 
                 <!-- Link to Organisation -->
@@ -298,25 +324,6 @@
                     </reference>
                 </xsl:if>
             </resource>
-
-            <!-- Person record -->
-            <data field="pe_label"><xsl:value-of select="col[@field='Label']/text()"/></data>
-            <data field="first_name"><xsl:value-of select="col[@field='First Name']/text()"/></data>
-            <xsl:if test="col[@field='Middle Name']/text()!=''">
-                <data field="middle_name"><xsl:value-of select="col[@field='Middle Name']/text()"/></data>
-            </xsl:if>
-            <data field="last_name"><xsl:value-of select="col[@field='Last Name']/text()"/></data>
-            <xsl:if test="col[@field='Initials']/text()!=''">
-                <data field="initials"><xsl:value-of select="col[@field='Initials']/text()"/></data>
-            </xsl:if>
-            <xsl:if test="col[@field='DOB']/text()!=''">
-                <data field="date_of_birth"><xsl:value-of select="col[@field='DOB']/text()"/></data>
-            </xsl:if>
-            <xsl:if test="$gender!=''">
-                <data field="gender">
-                    <xsl:attribute name="value"><xsl:value-of select="$gender"/></xsl:attribute>
-                </data>
-            </xsl:if>
 
             <!-- Appointments -->
             <xsl:for-each select="col[starts-with(@field, 'Appointment')]">

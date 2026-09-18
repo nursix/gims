@@ -489,10 +489,14 @@ class CRShelterModel(DataModel):
             record = form.record if hasattr(form, "record") else None
             record_id = get_form_record_id(form)
 
-            form_vars = form.vars
+            table = s3db.cr_shelter
+            data = get_form_record_data(form, table, ["obsolete", "status"])
+            obsolete = data.get("obsolete")
+            status = data.get("status")
+            if status:
+                status = str(status)
 
-            status = form_vars.get("status")
-            if record_id and str(status) == "1": # closed
+            if record_id and (obsolete or status == "1"): # closed
 
                 # Determine previous status
                 if not record or "status" not in record:
@@ -500,10 +504,10 @@ class CRShelterModel(DataModel):
                     record = db(table.id == record_id).select(table.status,
                                                               limitby = (0, 1),
                                                               ).first()
-                old_status = record.status if record else None
+                old_status = str(record.status) if record else None
 
-                # If changing to "closed", verify that there are no more people checked-in
-                if record and status != old_status:
+                # If changing status to "closed", verify that there are no more people checked-in
+                if record and status == "1" and status != old_status:
                     rtable = s3db.cr_shelter_registration
                     query = (rtable.shelter_id == record_id) & \
                             (rtable.registration_status == 2) & \
@@ -511,6 +515,10 @@ class CRShelterModel(DataModel):
                     row = db(query).select(rtable.id, limitby=(0, 1)).first()
                     if row:
                         form.errors.status = T("Shelter is currently occupied and cannot be closed")
+
+                # If marked obsolete, refuse to re-open
+                if obsolete and status == "2" and status != old_status:
+                    form.errors.status = T("Cannot re-open a defunct shelter")
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -1384,15 +1392,15 @@ class CRShelterInspectionModel(DataModel):
                      )
 
         # CRUD Form
-        crud_form = S3SQLCustomForm("shelter_unit_id",
-                                    "date",
-                                    S3SQLInlineLink("shelter_flag",
-                                                    field = "flag_id",
-                                                    multiple = True,
-                                                    cols = 3,
-                                                    ),
-                                    "comments",
-                                    )
+        crud_form = CustomForm("shelter_unit_id",
+                               "date",
+                               InlineLink("shelter_flag",
+                                          field = "flag_id",
+                                          multiple = True,
+                                          cols = 3,
+                                          ),
+                               "comments",
+                               )
 
         # List fields
         list_fields = ["shelter_unit_id",
@@ -2757,8 +2765,8 @@ class cr_AssignUnit(BasicCRUD):
             r.error(400, current.messages.BAD_REQUEST)
 
         self.settings = current.response.s3.crud
-        sqlform = self.resource.get_config("crud_form")
-        self.sqlform = sqlform if sqlform else S3SQLDefaultForm()
+        form = self.resource.get_config("crud_form")
+        self.form = form if form else DefaultForm()
         self.data = None
 
         # Create or Update?

@@ -103,7 +103,7 @@ def config(settings):
     #settings.auth.registration_requests_image = True
     # Uncomment this to direct newly-registered users to their volunteer page to be able to add extra details
     # NB This requires Verification/Approval to be Off
-    # @ToDo: Extend to all optional Profile settings: Homepage, Twitter, Facebook, Mobile Phone, Image
+    # @ToDo: Extend to all optional Profile settings: Homepage, Mobile Phone, Image
     #settings.auth.registration_volunteer = True
     # Terms of Service to be able to Register on the system
     # https://termsfeed.com/terms-conditions/generator/
@@ -985,14 +985,10 @@ def config(settings):
     #settings.inv.facility_label = "Facility"
     # Uncomment if you need a simpler (but less accountable) process for managing stock levels
     #settings.inv.direct_stock_edits = True
-    # Uncomment to have Warehouse Types be Organisation-dependent
-    #settings.inv.org_dependent_warehouse_types = True
     # Uncomment to call Stock Adjustments, 'Stock Counts'
     #settings.inv.stock_count = True
     # Use the term 'Order' instead of 'Shipment'
     #settings.inv.shipment_name = "order"
-    # Uncomment to validate for Unique Warehouse Codes
-    #settings.inv.warehouse_code_unique = True
     #settings.inv.show_mode_of_transport = True
     #settings.inv.send_show_org = False
     #settings.inv.send_show_time_in = True

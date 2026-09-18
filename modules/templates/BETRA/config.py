@@ -114,11 +114,11 @@ def config(settings):
     # Defaults for custom settings
     #
     settings.custom.autogenerate_case_ids = True
-    settings.custom.context_org_name = "Eden ASP"
+    settings.custom.context_org_name = "Sahana Eden"
 
-    settings.custom.org_menu_logo = ("default", "img", "eden_asp_small.png")
-    settings.custom.homepage_logo = ("default", "img", "eden_asp_large.png")
-    settings.custom.idcard_default_logo = ("default", "img", "eden_asp_small.png")
+    settings.custom.org_menu_logo = ("default", "img", "eden_small.png")
+    settings.custom.homepage_logo = ("default", "img", "eden_large.png")
+    settings.custom.idcard_default_logo = ("default", "img", "eden_small.png")
 
     # -------------------------------------------------------------------------
     # General UI settings
@@ -246,9 +246,9 @@ def config(settings):
     # Which subject type to use for case activities (subject|need|both)
     settings.dvr.case_activity_subject_type = "need"
     # Allow marking case activities as emergencies
-    settings.dvr.case_activity_emergency = True
+    settings.dvr.case_activity_emergency = False
     # Disable recording of free-text need details
-    settings.dvr.case_activity_need_details = False
+    settings.dvr.case_activity_need_details = True
     # Enable/disable linking of case activities to relevant vulnerabilities
     settings.dvr.case_activity_vulnerabilities = False
     # Enable/disable free-text response details
@@ -298,14 +298,17 @@ def config(settings):
     # Uncomment this to have allowance payments update last_seen_on
     #settings.dvr.payments_update_last_seen_on = True
 
-    from .customise.dvr import dvr_task_resource, \
-                               dvr_note_resource
+    from .customise.dvr import dvr_case_resource, \
+                               dvr_note_resource, \
+                               dvr_task_resource, \
+                               dvr_case_activity_status_resource
                                #dvr_case_activity_resource
                                #dvr_note_type_resource
 
-
+    settings.customise_dvr_case_resource = dvr_case_resource
     settings.customise_dvr_note_resource = dvr_note_resource
     settings.customise_dvr_task_resource = dvr_task_resource
+    settings.customise_dvr_case_activity_status_resource = dvr_case_activity_status_resource
     #settings.customise_dvr_case_activity_resource = dvr_case_activity_resource
     #settings.customise_dvr_note_type_resource = dvr_note_type_resource
 
@@ -342,7 +345,10 @@ def config(settings):
     settings.pr.name_format= "%(last_name)s, %(first_name)s"
     settings.pr.generate_pe_label = True
 
-    from .customise.pr import pr_person_controller
+    from .customise.pr import pr_person_resource, \
+                              pr_person_controller
+
+    settings.customise_pr_person_resource = pr_person_resource
     settings.customise_pr_person_controller = pr_person_controller
 
     # -------------------------------------------------------------------------

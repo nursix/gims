@@ -104,7 +104,6 @@ class ICON(I):
             "event": "fa-bolt",
             "exclamation": "fa-exclamation",
             "eye": "fa-eye",
-            "facebook": "fa-facebook",
             "facility": "fa-home",
             "file": "fa-file",
             "file-alt": "fa-file-o",
@@ -181,7 +180,6 @@ class ICON(I):
             "th": "fa-th",
             "time": "fa-time",
             "truck": "fa-truck",
-            "twitter": "fa-twitter",
             "undo": "fa-undo",
             "unsent": "fa-times",
             "up": "fa-caret-up",
@@ -217,7 +215,6 @@ class ICON(I):
             "eraser": "fi-trash",
             "exclamation": "fi-alert",
             "eye": "fi-eye",
-            "facebook": "fi-social-facebook",
             "facility": "fi-home",
             "file": "fi-page-filled",
             "file-alt": "fi-page",
@@ -272,7 +269,6 @@ class ICON(I):
             "tags": "fi-pricetag-multiple",
             "tasks": "fi-clipboard-notes",
             "time": "fi-clock",
-            "twitter": "fi-social-twitter",
             "undo": "fi-arrow-left",
             "unsent": "fi-x",
             "upload": "fi-upload",
@@ -309,7 +305,6 @@ class ICON(I):
             "eraser": "icon-eraser",
             "exclamation": "icon-exclamation",
             "eye": "icon-eye-open",
-            "facebook": "icon-facebook",
             "facility": "icon-home",
             "file": "icon-file",
             "file-alt": "icon-file-alt",
@@ -366,7 +361,6 @@ class ICON(I):
             "tasks": "icon-tasks",
             "time": "icon-time",
             "truck": "icon-truck",
-            "twitter": "icon-twitter",
             "undo": "icon-undo",
             "unsent": "icon-remove",
             "up": "icon-caret-up",
@@ -387,7 +381,7 @@ class ICON(I):
         """
 
         self.name = name
-        super(ICON, self).__init__(" ", **attr)
+        super().__init__(" ", **attr)
 
     # -------------------------------------------------------------------------
     def xml(self):
@@ -405,7 +399,7 @@ class ICON(I):
         if css_class:
             self.add_class(css_class)
 
-        return super(ICON, self).xml()
+        return super().xml()
 
     # -------------------------------------------------------------------------
     @classmethod

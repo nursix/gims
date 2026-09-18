@@ -144,6 +144,7 @@ class OrgOrganisationModel(DataModel):
                      Field("parent", "reference org_organisation_type", # This form of hierarchy may not work on all Databases
                            label = T("SubType of"),
                            ondelete = "RESTRICT",
+                           requires = IS_EMPTY_OR(IS_IN_DB(db, "%s.id" % tablename)),
                            readable = hierarchical_organisation_types,
                            writable = hierarchical_organisation_types,
                            ),
@@ -255,6 +256,7 @@ class OrgOrganisationModel(DataModel):
                                # Label hard-coded for IFRC currently
                                label = T("Zone"),
                                ondelete = "RESTRICT",
+                               requires = IS_EMPTY_OR(IS_IN_DB(db, "%s.id" % tablename)),
                                readable = hierarchical_regions,
                                writable = hierarchical_regions,
                                ),
@@ -356,9 +358,10 @@ class OrgOrganisationModel(DataModel):
                      self.super_link("pe_id", "pr_pentity"),
                      Field("root_organisation", "reference org_organisation",
                            ondelete = "CASCADE",
+                           represent = S3Represent(lookup="org_organisation"),
+                           requires = IS_EMPTY_OR(IS_IN_DB(db, "%s.id" % tablename)),
                            readable = False,
                            writable = False,
-                           represent = S3Represent(lookup="org_organisation"),
                            ),
                      Field("name", notnull=True,
                            length=128, # Mayon Compatibility
@@ -447,7 +450,7 @@ class OrgOrganisationModel(DataModel):
 
         crud_fields = ["name",
                        "acronym",
-                       S3SQLInlineLink(
+                       InlineLink(
                             "organisation_type",
                             field = "organisation_type_id",
                             # Disable "Search"-field in multi-select widget:
@@ -470,14 +473,14 @@ class OrgOrganisationModel(DataModel):
 
         use_sector = settings.get_org_sector()
         if use_sector:
-            crud_fields.insert(3, S3SQLInlineLink("sector",
-                                                  columns = 4,
-                                                  label = T("Sectors"),
-                                                  field = "sector_id",
-                                                  ),
+            crud_fields.insert(3, InlineLink("sector",
+                                             columns = 4,
+                                             label = T("Sectors"),
+                                             field = "sector_id",
+                                             ),
                                )
 
-        crud_form = S3SQLCustomForm(*crud_fields)
+        crud_form = CustomForm(*crud_fields)
 
         # CRUD strings
         crud_strings[tablename] = Storage(
@@ -738,13 +741,6 @@ class OrgOrganisationModel(DataModel):
                        org_service_organisation = "organisation_id",
                        # Assets
                        asset_asset = "organisation_id",
-                       # Needs
-                       req_need = {"name": "needs",
-                                   "link": "req_need_organisation",
-                                   "joinby": "organisation_id",
-                                   "key": "need_id",
-                                   "multiple": False,
-                                   },
                        # Requests
                        #req_req = "donated_by_id",
 
@@ -847,7 +843,7 @@ class OrgOrganisationModel(DataModel):
                      )
 
         configure(tablename,
-                  # Whilst S3SQLInlineLink can resolve duplicates automatically, imports cannot
+                  # Whilst InlineLink can resolve duplicates automatically, imports cannot
                   deduplicate = S3Duplicate(primary = ("organisation_id",
                                                        "organisation_type_id",
                                                        ),
@@ -1136,8 +1132,10 @@ class OrgOrganisationNameModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgOrganisationBranchModel(DataModel):
@@ -1563,7 +1561,9 @@ class OrgOrganisationGroupModel(DataModel):
                   ondelete = self.group_membership_onaccept,
                   )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
+        #
         return {"org_group_id": group_id,
                 "org_group_represent": group_represent,
                 }
@@ -1697,7 +1697,8 @@ class OrgOrganisationGroupPersonModel(DataModel):
 
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgOrganisationGroupTeamModel(DataModel):
@@ -1733,8 +1734,10 @@ class OrgOrganisationGroupTeamModel(DataModel):
                        onaccept = self.org_group_team_onaccept,
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -1816,8 +1819,10 @@ class OrgOrganisationLocationModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgOrganisationOrganisationModel(DataModel):
@@ -1864,8 +1869,10 @@ class OrgOrganisationOrganisationModel(DataModel):
                        realm_entity = self.org_organisation_organisation_realm_entity,
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -2048,8 +2055,10 @@ class OrgOrganisationResourceModel(DataModel):
                   super_entity = "stats_data",
                   )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgOrganisationSectorModel(DataModel):
@@ -2190,7 +2199,9 @@ class OrgOrganisationSectorModel(DataModel):
                                             ),
                   )
 
+        # --------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
+        #
         return {"org_sector_id": sector_id,
                 }
 
@@ -2318,6 +2329,7 @@ class OrgServiceModel(DataModel):
         define_table(tablename,
                      Field("root_service", "reference org_service",
                            ondelete = "CASCADE",
+                           requires = IS_EMPTY_OR(IS_IN_DB(db, "%s.id" % tablename)),
                            readable = False,
                            writable = False,
                            ),
@@ -2331,6 +2343,7 @@ class OrgServiceModel(DataModel):
                      Field("parent", "reference org_service",
                            label = T("SubType of"),
                            ondelete = "RESTRICT",
+                           requires = IS_EMPTY_OR(IS_IN_DB(db, "%s.id" % tablename)),
                            readable = hierarchical_service_types,
                            writable = hierarchical_service_types,
                            ),
@@ -2540,13 +2553,13 @@ class OrgServiceModel(DataModel):
 
         # CRUD form
         service_widget = "hierarchy" if hierarchical_service_types else None
-        crud_form = S3SQLCustomForm(
+        crud_form = CustomForm(
                         "organisation_id",
                         "site_id",
-                        S3SQLInlineLink("service",
-                                        field = "service_id",
-                                        widget = service_widget,
-                                        ),
+                        InlineLink("service",
+                                   field = "service_id",
+                                   widget = service_widget,
+                                   ),
                         "description",
                         "status",
                         "start_date",
@@ -2570,6 +2583,7 @@ class OrgServiceModel(DataModel):
                          "site_id",
                          "service_location_service.service_id",
                          ]
+        default_row = report_fields[0]
         add_report_field = report_fields.append
 
         # Location levels (append to list fields and report axes)
@@ -2877,43 +2891,67 @@ class OrgOrganisationTagModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgOrganisationTeamModel(DataModel):
-    """
-        Link table between Organisations & Teams
-    """
+    """ Model for Teams Management """
 
-    names = ("org_organisation_team",)
+    names = ("org_organisation_team",
+             "org_team_service",
+             )
 
     def model(self):
 
+        group_id = self.pr_group_id
+
+        define_table = self.define_table
+        configure = self.configure
+
         # ---------------------------------------------------------------------
-        # Link table between Organisations & Teams
+        # Team <=> Organisation Link Table
         #
         tablename = "org_organisation_team"
-        self.define_table(tablename,
-                          self.org_organisation_id(empty = False,
-                                                   ondelete = "CASCADE",
-                                                   ),
-                          self.pr_group_id(empty = False,
-                                           ondelete = "CASCADE",
-                                           ),
-                          )
+        define_table(tablename,
+                     self.org_organisation_id(empty = False,
+                                              ondelete = "CASCADE",
+                                              ),
+                     group_id(empty = False,
+                              ondelete = "CASCADE",
+                              ),
+                     )
 
-        self.configure(tablename,
-                       deduplicate = S3Duplicate(primary = ("organisation_id",
-                                                            "group_id",
-                                                            ),
-                                                 ),
-                       onaccept = self.organisation_team_onaccept,
-                       ondelete = self.organisation_team_ondelete,
-                       )
+        configure(tablename,
+                  deduplicate = S3Duplicate(primary = ("organisation_id",
+                                                       "group_id",
+                                                       ),
+                                            ),
+                  onaccept = self.organisation_team_onaccept,
+                  ondelete = self.organisation_team_ondelete,
+                  )
 
+        # ---------------------------------------------------------------------
+        # Services provided by a team (capabilities)
+        #
+        tablename = "org_team_service"
+        define_table(tablename,
+                     group_id(empty=False, ondelete="CASCADE"),
+                     self.org_service_id(empty=False, ondelete="CASCADE"),
+                     )
+
+        # ---------------------------------------------------------------------
+        # TODO Team status
+
+        # ---------------------------------------------------------------------
+        # TODO Team deployments
+
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -2982,8 +3020,10 @@ class OrgOrganisationTypeTagModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgSiteModel(DataModel):
@@ -3187,14 +3227,6 @@ class OrgSiteModel(DataModel):
                        # Format for InlineComponent/filter_widget
                        org_site_org_group = "site_id",
 
-                       # Needs
-                       req_need = {"name": "needs",
-                                   "link": "req_need_site",
-                                   "joinby": "site_id",
-                                   "key": "need_id",
-                                   "multiple": False,
-                                   },
-
                        # Requests
                        req_req = "site_id",
                        req_commit = "site_id",
@@ -3211,7 +3243,9 @@ class OrgSiteModel(DataModel):
                        proc_plan = "site_id",
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
+        #
         return {"org_site_id": site_id,
                 "org_site_represent": org_site_represent,
                 }
@@ -3679,6 +3713,7 @@ class OrgSiteDetailsModel(DataModel):
 
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
+        #
         return {"org_site_status_opts": site_status_opts,
                 }
 
@@ -3744,8 +3779,10 @@ class OrgSiteEventModel(DataModel):
                        orderby = "org_site_event.date desc",
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgSitePresenceModel(DataModel):
@@ -3862,7 +3899,8 @@ class OrgSitePresenceModel(DataModel):
 
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -3998,8 +4036,10 @@ class OrgSiteGroupModel(DataModel):
                                             ),
                           )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgSiteNameModel(DataModel):
@@ -4036,8 +4076,10 @@ class OrgSiteNameModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgSiteShiftModel(DataModel):
@@ -4078,8 +4120,10 @@ class OrgSiteShiftModel(DataModel):
         #    msg_list_empty = T("No Shifts found for this %(site_label)s") % {"site_label": site_label},
         #    )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgSiteTagModel(DataModel):
@@ -4126,8 +4170,10 @@ class OrgSiteTagModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgSiteLocationModel(DataModel):
@@ -4190,8 +4236,10 @@ class OrgSiteLocationModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
 
 # =============================================================================
 class OrgFacilityModel(DataModel):
@@ -4202,7 +4250,7 @@ class OrgFacilityModel(DataModel):
     names = ("org_facility_type",
              "org_facility",
              "org_site_facility_type",
-             "org_facility_type_id", # Passed to global for s3translate
+             "org_facility_type_id",
              "org_facility_geojson",
              )
 
@@ -4236,6 +4284,7 @@ class OrgFacilityModel(DataModel):
                      Field("parent", "reference org_facility_type", # This form of hierarchy may not work on all Databases
                            label = T("SubType of"),
                            ondelete = "RESTRICT",
+                           requires = IS_EMPTY_OR(IS_IN_DB(db, "%s.id" % tablename)),
                            readable = hierarchical_facility_types,
                            writable = hierarchical_facility_types,
                            ),
@@ -4546,32 +4595,32 @@ class OrgFacilityModel(DataModel):
             type_widget = "hierarchy"
         else:
             type_widget = "groupedopts"
-        crud_form = S3SQLCustomForm("name",
-                                    "code",
-                                    S3SQLInlineLink(
-                                          "facility_type",
-                                          label = T("Facility Type"),
-                                          field = "facility_type_id",
-                                          widget = type_widget,
-                                          cols = 3,
+        crud_form = CustomForm("name",
+                               "code",
+                               InlineLink(
+                                    "facility_type",
+                                    label = T("Facility Type"),
+                                    field = "facility_type_id",
+                                    widget = type_widget,
+                                    cols = 3,
                                     ),
-                                    "organisation_id",
-                                    "location_id",
-                                    "opening_times",
-                                    "contact",
-                                    "phone1",
-                                    "phone2",
-                                    "email",
-                                    "website",
-                                    #S3SQLInlineComponent(
-                                    #    "status",
-                                    #    label = T("Status"),
-                                    #    fields = ["last_contacted"],
-                                    #    multiple = False,
-                                    #),
-                                    "obsolete",
-                                    "comments",
-                                    )
+                               "organisation_id",
+                               "location_id",
+                               "opening_times",
+                               "contact",
+                               "phone1",
+                               "phone2",
+                               "email",
+                               "website",
+                               #InlineComponent(
+                               #    "status",
+                               #    label = T("Status"),
+                               #    fields = ["last_contacted"],
+                               #    multiple = False,
+                               #),
+                               "obsolete",
+                               "comments",
+                               )
 
         list_fields = ["name",
                        "code",
@@ -4646,7 +4695,9 @@ class OrgFacilityModel(DataModel):
                      facility_type_id(),
                      )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
+        #
         return {"org_facility_type_id": facility_type_id,
                 "org_facility_geojson": self.org_facility_geojson,
                 }
@@ -4935,7 +4986,9 @@ class OrgRoomModel(DataModel):
                        deduplicate = S3Duplicate(),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
+        #
         return {"org_room_id": room_id,
                 }
 
@@ -4970,7 +5023,7 @@ class OrgOfficeModel(DataModel):
         is_admin = auth.s3_has_role(ADMIN)
         root_org = auth.root_org()
         if is_admin:
-            filter_opts = ()
+            filter_opts = None
         elif root_org:
             filter_opts = (root_org, None)
         else:
@@ -5130,7 +5183,7 @@ class OrgOfficeModel(DataModel):
                        "comments",
                        ]
 
-        crud_form = S3SQLCustomForm(*crud_fields)
+        crud_form = CustomForm(*crud_fields)
 
         # CRUD strings
         crud_strings[tablename] = Storage(
@@ -5256,7 +5309,9 @@ class OrgOfficeModel(DataModel):
                   #update_realm = True,
                   )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
+        #
         return {"org_office_type_id": office_type_id,
                 }
 
@@ -5312,8 +5367,11 @@ class OrgOfficeTypeTagModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        # return None
+
 
 # =============================================================================
 def org_organisation_address(row):
@@ -5751,6 +5809,7 @@ class org_OrganisationRepresent(S3Represent):
         """
 
         show_parent = self.parent
+        parent = None
         if self.translate:
             # Custom Row (with the name_l10n left-joined)
             name = row["org_organisation_name.name_l10n"] or \
@@ -5867,15 +5926,15 @@ class org_SiteRepresent(S3Represent):
         show_link = show_link and self.show_link
         if show_link and not rows:
             # Retrieve the rows
-            rows = self.lookup_rows(None, values)
+            rows = self.lookup_rows(None, [v for v in values if v is not None])
 
         self._setup()
 
         # Get the values
         if rows and self.table:
             values = [row["org_site.site_id"] for row in rows]
-        else:
-            values = [values] if type(values) is not list else values
+        elif not isinstance(values, list):
+            values = [values]
 
         # Lookup the representations
         if values:
@@ -6405,8 +6464,8 @@ class org_SiteCheckInMethod(CRUDMethod):
 
         person_details = cls.person_details(person)
         output = {"d": s3_str(person_details),
-                  "i": True if status.get("check_in_allowed") else False,
-                  "o": True if status.get("check_out_allowed") else False,
+                  "i": bool(status.get("check_in_allowed")),
+                  "o": bool(status.get("check_out_allowed")),
                   "s": status.get("status"),
                   }
 
@@ -7134,15 +7193,15 @@ def org_organisation_controller():
                             for key in keys:
                                 tag = key.tag
                                 label = T(tag.title())
-                                cappend(S3SQLInlineComponent("tag",
-                                                             label = label,
-                                                             name = tag,
-                                                             multiple = False,
-                                                             fields = [("", "value")],
-                                                             filterby = {"field": "tag",
-                                                                         "options": tag,
-                                                                         }
-                                                             ))
+                                cappend(InlineComponent("tag",
+                                                        label = label,
+                                                        name = tag,
+                                                        multiple = False,
+                                                        fields = [("", "value")],
+                                                        filterby = {"field": "tag",
+                                                                    "options": tag,
+                                                                    }
+                                                        ))
                                 add_component(tablename,
                                               org_organisation_tag = {"name": tag,
                                                                       "joinby": "organisation_id",
@@ -7152,7 +7211,7 @@ def org_organisation_controller():
                                                                       },
                                               )
                                 lappend((label, "%s.value" % tag))
-                            crud_form = S3SQLCustomForm(*crud_fields)
+                            crud_form = CustomForm(*crud_fields)
                             s3db.configure(tablename,
                                            crud_form = crud_form,
                                            )
@@ -7480,11 +7539,14 @@ def org_site_staff_config(r):
             # Default to Volunteers
             table.type.default = 2
 
-    # Cascade the organisation_id from the site to the staff
-    field = table.organisation_id
-    field.default = r.record.organisation_id
-    field.writable = False
-    field.comment = None
+    # Cascade organisation from the parent site where available
+    # (options lookups can call this without a parent record)
+    record = r.record
+    if record:
+        field = table.organisation_id
+        field.default = record.organisation_id
+        field.writable = False
+        field.comment = None
 
 # =============================================================================
 def org_office_controller():
@@ -7502,7 +7564,7 @@ def org_office_controller():
     # Get default organisation_id
     req_vars = request.vars
     organisation_id = req_vars["organisation_id"]
-    if type(organisation_id) is list:
+    if isinstance(organisation_id, list):
         req_vars["organisation_id"] = organisation_id[0]
     organisation_id = req_vars["organisation_id"] or \
                       current.session.s3.organisation_id or \

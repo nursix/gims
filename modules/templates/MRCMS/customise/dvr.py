@@ -10,10 +10,11 @@ from gluon import current, URL, A, TAG, IS_EMPTY_OR
 from gluon.storage import Storage
 
 from core import CRUDRequest, CustomController, FS, IS_ONE_OF, \
-                 S3CalendarWidget, S3HoursWidget, S3SQLCustomForm, S3SQLInlineLink, \
+                 S3CalendarWidget, S3HoursWidget, CustomForm, InlineLink, \
                  DateFilter, HierarchyFilter, OptionsFilter, TextFilter, \
-                 get_filter_options, get_form_record_id, s3_redirect_default, \
-                 represent_hours, set_default_filter, s3_fullname
+                 get_filter_options, get_form_record_data, get_form_record_id, \
+                 s3_redirect_default, represent_hours, set_default_filter, \
+                 s3_fullname
 
 from .pr import configure_person_tags
 
@@ -144,15 +145,15 @@ def dvr_task_controller(**attr):
                                       categories = categories,
                                       default_category = default_category,
                                       )
-        resource = r.resource
-        resource.configure(insertable = False,
-                           deletable = False,
-                           )
+        r.resource.configure(insertable = False,
+                             deletable = False,
+                             )
         return result
     s3.prep = prep
 
     from ..rheaders import dvr_rheader
     attr["rheader"] = dvr_rheader
+
     return attr
 
 # -------------------------------------------------------------------------
@@ -252,7 +253,7 @@ def dvr_note_resource(r, tablename):
     form_fields = ["date", "note", type_id, "created_by"]
     list_fields = ["date", "note", type_id, "created_by"]
     s3db.configure("dvr_note",
-                   crud_form = S3SQLCustomForm(*form_fields),
+                   crud_form = CustomForm(*form_fields),
                    list_fields = list_fields,
                    orderby = "%(tn)s.date desc,%(tn)s.created_on desc" % \
                              {"tn": table._tablename},
@@ -267,6 +268,10 @@ def dvr_need_resource(r, tablename):
 
     # Expose code
     field = table.code
+    field.readable = field.writable = True
+
+    # Expose protection flag
+    field = table.protection
     field.readable = field.writable = True
 
 # -------------------------------------------------------------------------
@@ -341,6 +346,126 @@ def dvr_case_activity_controller(**attr):
     return attr
 
 # -------------------------------------------------------------------------
+def dvr_response_type_resource(r, tablename):
+
+    # Enable use of codes for statistics/reports
+    table = current.s3db.dvr_response_type
+    field = table.code
+    field.readable = field.writable = True
+
+# -------------------------------------------------------------------------
+def response_action_onvalidation(form):
+    """
+        Onvalidation for response actions:
+            - make sure an initial consultation is documented before
+              any follow-up consultations
+    """
+
+    T = current.T
+
+    db = current.db
+    s3db = current.s3db
+
+    table = s3db.dvr_response_action
+    ttable = s3db.dvr_response_type
+    stable = s3db.dvr_response_status
+
+    # Get form record data
+    record_id = get_form_record_id(form)
+    data = get_form_record_data(form, table, ["person_id",
+                                              "response_type_id",
+                                              "status_id",
+                                              ])
+
+    # Get the response type
+    query = (ttable.id == data.get("response_type_id"))
+    row = db(query).select(ttable.code,
+                           ttable.is_consultation,
+                           limitby = (0, 1),
+                           ).first()
+
+    initial_types, follow_up_types = ("INI", "INI+I"), ("FUP", "FUP+I")
+
+    # If this is a follow-up consultation, make sure that an initial
+    # consultation has already been documented for the client
+    if row and row.is_consultation and row.code in follow_up_types:
+        join = [ttable.on((ttable.id == table.response_type_id) & \
+                          (ttable.is_consultation == True) & \
+                          (ttable.code.belongs(initial_types))),
+                stable.on((stable.id == table.status_id) & \
+                          (stable.is_canceled == False)),
+                ]
+        query = (table.person_id == data.get("person_id")) & \
+                (table.deleted == False)
+        if record_id:
+            query = (table.id != record_id) & query
+        initial = db(query).select(table.id, join=join, limitby=(0, 1)).first()
+        if not initial:
+            form.errors["response_type_id"] = T("No initial consultation registered yet")
+
+# -------------------------------------------------------------------------
+def response_action_postprocess(default_postprocess):
+    """
+        Custom extension for response action postprocess:
+        - warns if the action concerns a vulnerability report but
+          no vulnerabilities have been specified
+
+        Args:
+            default_postprocess: the default postprocess
+
+        Returns:
+            the extended postprocess
+    """
+
+    def postprocess(form):
+
+        if callable(default_postprocess):
+            default_postprocess(form)
+
+        record_id = get_form_record_id(form)
+        if not record_id:
+            return
+
+        db = current.db
+        s3db = current.s3db
+
+        table = s3db.dvr_response_action
+        ttable = s3db.dvr_response_type
+        ltable = s3db.dvr_vulnerability_response_action
+
+        join = ttable.on((ttable.id == table.response_type_id) & \
+                         (ttable.code.belongs(("VRBAMF", "VRRP", "VRSSD")))
+                         )
+        left = ltable.on((ltable.action_id == table.id) & \
+                         (ltable.vulnerability_id != None) & \
+                         (ltable.deleted == False)
+                         )
+        query = (table.id == record_id) & (table.deleted == False)
+        row = db(query).select(table.id,
+                               table.person_id,
+                               ltable.id,
+                               join = join,
+                               left = left,
+                               limitby = (0, 1),
+                               ).first()
+        if row and not row[ltable].id:
+            current.response.warning = current.T("No vulnerabilities specified!")
+
+    return postprocess
+
+# -------------------------------------------------------------------------
+def response_date_dt_orderby(field, direction, orderby, left_joins):
+    """
+        When sorting response actions by date, use created_on to maintain
+        consistent order of multiple response actions on the same date
+    """
+
+    sorting = {"table": field.tablename,
+               "direction": direction,
+               }
+    orderby.append("%(table)s.start_date%(direction)s,%(table)s.created_on%(direction)s" % sorting)
+
+# -------------------------------------------------------------------------
 def configure_response_action_reports(r,
                                       multiple_orgs = False,
                                       ):
@@ -368,6 +493,7 @@ def configure_response_action_reports(r,
             "response_type_id",
             (T("Theme"), "response_action_theme.theme_id"),
             (T("Need Type"), "response_action_theme.theme_id$need_id"),
+            (T("Vulnerability addressed"), "vulnerability.vulnerability_type_id"),
             "response_action_theme.theme_id$sector_id",
             "human_resource_id",
             ]
@@ -393,6 +519,43 @@ def configure_response_action_reports(r,
                            )
 
 # -------------------------------------------------------------------------
+def response_action_staff_filter_options():
+    """
+        Reverse lookup for staff filter options in response action list
+
+        Returns:
+            dict of filter options {human_resource_id: full_name}
+    """
+
+    db = current.db
+    s3db = current.s3db
+    auth = current.auth
+
+    rtable = s3db.dvr_response_action
+    htable = s3db.hrm_human_resource
+    ptable = s3db.pr_person
+
+    # Sub-select distinct human_resource_ids in accessible response actions
+    query = auth.s3_accessible_query("read", rtable) & \
+            (rtable.human_resource_id != None)
+    responders = db(query).nested_select(rtable.human_resource_id,
+                                         distinct = True,
+                                         ).with_alias("responders")
+
+    # Select all staff options matching this set, avoiding
+    query = auth.s3_accessible_query("read", htable)
+    join = [responders.on(responders.human_resource_id == htable.id),
+            ptable.on(ptable.id == htable.person_id),
+            ]
+    rows = db(query).select(htable.id,
+                            ptable.first_name,
+                            ptable.last_name,
+                            join = join,
+                            )
+
+    return {row.hrm_human_resource.id: s3_fullname(row.pr_person) for row in rows}
+
+# -------------------------------------------------------------------------
 def configure_response_action_filters(r,
                                       on_tab = None,
                                       multiple_orgs = False,
@@ -412,7 +575,6 @@ def configure_response_action_filters(r,
     T = current.T
 
     s3db = current.s3db
-    table = s3db.dvr_response_action
 
     if on_tab is None:
         resource = r.resource
@@ -483,6 +645,11 @@ def configure_response_action_filters(r,
                                                        org_filter = True,
                                                        ),
                           ),
+            OptionsFilter("human_resource_id",
+                          header = True,
+                          hidden = True,
+                          options = response_action_staff_filter_options,
+                          ),
             ]
 
         if multiple_orgs:
@@ -500,22 +667,6 @@ def configure_response_action_filters(r,
                                                    options = org_filter_opts,
                                                    ))
 
-        # Filter by person responsible
-        field = table.human_resource_id
-        try:
-            hr_filter_opts = field.requires.options()
-        except AttributeError:
-            pass
-        else:
-            hr_filter_opts = dict(hr_filter_opts)
-            hr_filter_opts.pop('', None)
-        if hr_filter_opts:
-            filter_widgets.append(OptionsFilter("human_resource_id",
-                                                header = True,
-                                                hidden = True,
-                                                options = hr_filter_opts,
-                                                ))
-
     s3db.configure("dvr_response_action",
                    filter_widgets = filter_widgets,
                    )
@@ -526,6 +677,7 @@ def dvr_response_action_resource(r, tablename):
     T = current.T
 
     s3db = current.s3db
+    settings = current.deployment_settings
 
     atable = s3db.dvr_response_action
     ltable = s3db.dvr_response_action_theme
@@ -567,8 +719,14 @@ def dvr_response_action_resource(r, tablename):
                                                    )
         field.comment = None
 
+    # Do not show staff member as link
     field = atable.human_resource_id
     field.represent = s3db.hrm_HumanResourceRepresent(show_link=False)
+
+    # Maintain consistent order for multiple response actions
+    # on the same day (by enforcing created_on as secondary order criterion)
+    field = atable.start_date
+    field.represent.dt_orderby = response_date_dt_orderby
 
     # List fields
     list_fields = [pe_label,
@@ -594,6 +752,19 @@ def dvr_response_action_resource(r, tablename):
                    pdf_fields = pdf_fields,
                    orderby = "dvr_response_action.start_date desc, dvr_response_action.created_on desc",
                    )
+
+    # Custom onvalidation
+    s3db.add_custom_callback("dvr_response_action",
+                             "onvalidation",
+                             response_action_onvalidation,
+                             )
+
+    # Custom postprocess to warn for missing vulnerability links
+    if settings.get_dvr_response_vulnerabilities():
+        crud_form = s3db.get_config("dvr_response_action", "crud_form")
+        if isinstance(crud_form, CustomForm):
+            postprocess = crud_form.opts.get("postprocess")
+            crud_form.opts["postprocess"] = response_action_postprocess(postprocess)
 
 # -------------------------------------------------------------------------
 def dvr_response_action_controller(**attr):
@@ -1060,29 +1231,29 @@ def dvr_case_event_type_resource(r, tablename):
     #      if we have a r.record, otherwise OptionsFilterS3?
 
     # Custom form
-    crud_form = S3SQLCustomForm(# --- Event Type ---
-                                "organisation_id",
-                                "event_class",
-                                "code",
-                                "name",
-                                "is_inactive",
-                                "is_default",
-                                # --- Process ---
-                                "appointment_type_id",
-                                "activity_id",
-                                "presence_required",
-                                # --- Restrictions ---
-                                "residents_only",
-                                "register_multiple",
-                                "role_required",
-                                "min_interval",
-                                "max_per_day",
-                                S3SQLInlineLink("excluded_by",
-                                                field = "excluded_by_id",
-                                                label = T("Not Combinable With"),
-                                                comment = T("Events that exclude registration of this event type on the same day"),
-                                                ),
-                                )
+    crud_form = CustomForm(# --- Event Type ---
+                           "organisation_id",
+                           "event_class",
+                           "code",
+                           "name",
+                           "is_inactive",
+                           "is_default",
+                           # --- Process ---
+                           "appointment_type_id",
+                           "activity_id",
+                           "presence_required",
+                           # --- Restrictions ---
+                           "residents_only",
+                           "register_multiple",
+                           "role_required",
+                           "min_interval",
+                           "max_per_day",
+                           InlineLink("excluded_by",
+                                      field = "excluded_by_id",
+                                      label = T("Not Combinable With"),
+                                      comment = T("Events that exclude registration of this event type on the same day"),
+                                      ),
+                           )
 
     # Sub-headings for custom form
     subheadings = {"organisation_id": T("Event Type"),

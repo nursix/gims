@@ -75,7 +75,21 @@ class MainMenu(default.MainMenu):
         else:
             shelter_menu = MM("Shelters", c="cr", f="shelter")
 
-        return [
+        # Med-menu
+        if has_permission("read", "pr_person", c="dvr", f="person") and \
+           has_permission("read", "pr_person", c="med", f="person"):
+            # Primary perspective for case assistants
+            med_menu = MM("Medical", c="med", f=("person", "*"))
+        elif has_permission("read", "med_patient", c="med", f="patient"):
+            # Primary perspective for other medical personnel
+            med_menu = MM("Medical", c="med", f=("patient", "*"))
+        else:
+            # Fallback
+            # - will self-disable if user not permitted, hence no
+            #   MED-link at all without at least this permission
+            med_menu = MM("Medical", c="med", f=("unit", "*"))
+
+        menu = [
             MM("Clients", c=("dvr", "pr"), f=("person", "*")),
             MM("Food Distribution", c="dvr", f="case_event", m="register_food", p="create",
                restrict = "CATERING",
@@ -83,11 +97,18 @@ class MainMenu(default.MainMenu):
                ),
             MM("Counseling", c=("counsel", "pr"), f=("person", "*")),
             MM("Supply", c=("supply", "pr"), f=("person", "*")),
+            med_menu,
             shelter_menu,
             org_menu,
             MM("Security", c="security", f="seized_item"),
-            MM("To Do", c="act", f=("my_open_tasks", "task", "issue")),
+            # MM("To Do", c="act", f=("my_open_tasks", "task", "issue")),
             ]
+
+        # Optional entries
+        if current.deployment_settings.get_custom("manage_work_orders", True):
+            menu.append(MM("To Do", c="act", f=("my_open_tasks", "task", "issue")))
+
+        return menu
 
     # -------------------------------------------------------------------------
     @classmethod
@@ -126,7 +147,7 @@ class MainMenu(default.MainMenu):
 
         if not auth.is_logged_in():
             request = current.request
-            login_next = URL(args=request.args, vars=request.vars)
+            login_next = URL(args=request.args, vars=request.get_vars)
             if request.controller == "default" and \
                request.function == "user" and \
                "_next" in request.get_vars:
@@ -149,11 +170,11 @@ class MainMenu(default.MainMenu):
                                  ),
                               )
         else:
-            s3_has_role = auth.s3_has_role
-            is_user_admin = lambda i: \
-                            s3_has_role(sr.ORG_ADMIN, include_admin=False) or \
-                            s3_has_role(sr.ORG_GROUP_ADMIN, include_admin=False)
-
+            has_role = auth.s3_has_role
+            is_user_admin = lambda i: not has_role(ADMIN) and (
+                                        has_role(sr.ORG_ADMIN, include_admin=False) or \
+                                        has_role(sr.ORG_GROUP_ADMIN, include_admin=False)
+                                        )
             menu_personal = MP()(
                         MP("Administration", c="admin", f="index",
                            restrict = ADMIN,
@@ -379,6 +400,38 @@ class OptionsMenu(default.OptionsMenu):
                     M("Service Contact Types", f="service_contact_type", restrict=ADMIN),
                     ),
                 )
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def med():
+        """ Medical Journal """
+
+        ADMIN = current.session.s3.system_roles.ADMIN
+
+        is_case_reader = current.auth.s3_has_permission("read", "pr_person", c="dvr", f="person")
+
+        if is_case_reader:
+            menu = M()(
+                        M("Current Cases", c="med", f="person"),
+                        M("Visits", c="med", f="patient")(
+                            M("Create", m="create"),
+                            M("Concluded Visits", vars={"closed": "only"}),
+                            ),
+                        )
+        else:
+            menu = M()(
+                        M("Visits", c="med", f="patient")(
+                            M("Create", m="create"),
+                            M("Case Files", f="person"),
+                            ),
+                        )
+
+        return menu(M("Administration", c="med", link=False)(
+                        M("Care Units", f="unit", restrict=["ORG_ADMIN", "MED_ADMIN"]),
+                        M("Active Substances", f="substance", restrict=ADMIN),
+                        M("Vaccination Types", f="vaccination_type", restrict=ADMIN),
+                        ),
+                    )
 
     # -------------------------------------------------------------------------
     @staticmethod

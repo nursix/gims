@@ -4,7 +4,19 @@
     License: MIT
 """
 
-from gluon import current
+from gluon import current, IS_EMPTY_OR
+
+# -----------------------------------------------------------------------------
+def dvr_case_resource(r, tablename):
+
+    table = current.s3db.dvr_case
+
+    # Expose tc_signed + make it mandatory
+    field = table.tc_signed
+    field.readable = field.writable = True
+    requires = field.requires
+    if isinstance(requires, IS_EMPTY_OR):
+        field.requires = requires.other
 
 # -----------------------------------------------------------------------------
 def dvr_note_resource(r, tablename):
@@ -25,6 +37,14 @@ def dvr_note_resource(r, tablename):
 #    # - for future use if TRATWA will want this functionality
 #    table = current.s3db.dvr_note_type
 #    table.name.label = T("Name of Note Type")
+
+# -----------------------------------------------------------------------------
+def dvr_case_activity_status_resource(r, tablename):
+
+    table = current.s3db.dvr_case_activity_status
+
+    field = table.color
+    field.readable = field.writable = True
 
 # -----------------------------------------------------------------------------
 # def dvr_case_activity_resource(r, tablename):

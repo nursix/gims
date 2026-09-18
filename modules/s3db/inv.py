@@ -141,32 +141,21 @@ class InvWarehouseModel(DataModel):
 
         organisation_id = self.org_organisation_id
 
-        ADMIN = current.session.s3.system_roles.ADMIN
-        is_admin = auth.s3_has_role(ADMIN)
-
-        root_org = auth.root_org()
-        if is_admin:
-            filter_opts = ()
-        elif root_org:
-            filter_opts = (root_org, None)
-        else:
-            filter_opts = (None,)
 
         # ---------------------------------------------------------------------
         # Warehouse Types
         #
-        org_dependent_wh_types = settings.get_inv_org_dependent_warehouse_types()
+        # org_dependent_wh_types = settings.get_inv_org_dependent_warehouse_types()
 
         tablename = "inv_warehouse_type"
         define_table(tablename,
                      Field("name", length=128, notnull=True,
                            label = T("Name"),
-                           requires = IS_LENGTH(128),
+                           requires = [IS_NOT_EMPTY(),
+                                       IS_LENGTH(128),
+                                       IS_NOT_ONE_OF(db, "%s.name" % tablename,),
+                                      ],
                            ),
-                     organisation_id(default = root_org if org_dependent_wh_types else None,
-                                     readable = is_admin if org_dependent_wh_types else False,
-                                     writable = is_admin if org_dependent_wh_types else False,
-                                     ),
                      CommentsField(),
                      )
 
@@ -193,8 +182,8 @@ class InvWarehouseModel(DataModel):
                                           requires = IS_EMPTY_OR(
                                                         IS_ONE_OF(db, "inv_warehouse_type.id",
                                                                   represent,
-                                                                  filterby="organisation_id",
-                                                                  filter_opts=filter_opts,
+                                                                  #filterby="organisation_id",
+                                                                  #filter_opts=filter_opts if org_dependent_wh_types else None,
                                                                   sort=True
                                                                   )),
                                           sortby = "name",
@@ -208,7 +197,7 @@ class InvWarehouseModel(DataModel):
 
         configure(tablename,
                   deduplicate = S3Duplicate(primary = ("name",),
-                                            secondary = ("organisation_id",),
+                                            # secondary = ("organisation_id",) if org_dependent_wh_types else None,
                                             ),
                   )
 
@@ -222,14 +211,14 @@ class InvWarehouseModel(DataModel):
         # ---------------------------------------------------------------------
         # Warehouses
         #
-        if settings.get_inv_warehouse_code_unique():
-            code_requires = IS_EMPTY_OR([IS_LENGTH(10),
-                                         IS_NOT_IN_DB(db, "inv_warehouse.code"),
-                                         ])
-        else:
-            code_requires = IS_LENGTH(10)
-
         tablename = "inv_warehouse"
+        # if settings.get_inv_warehouse_code_unique():
+        code_requires = IS_EMPTY_OR([IS_LENGTH(10),
+                                     IS_NOT_IN_DB(db, "%s.code" % tablename),
+                                     ])
+        # else:
+        #    code_requires = IS_LENGTH(10)
+
         define_table(tablename,
                      super_link("pe_id", "pr_pentity"),
                      super_link("site_id", "org_site"),
@@ -1916,8 +1905,8 @@ $.filterOptionsS3({
                   extra_fields = ["quantity",
                                   "recv_quantity",
                                   "pack_value",
-                                  "item_id$volume",
-                                  "item_id$weight",
+                                  "item_pack_id$volume",
+                                  "item_pack_id$weight",
                                   "item_pack_id$quantity",
                                   ],
                   filter_widgets = filter_widgets,
@@ -2004,19 +1993,19 @@ $.filterOptionsS3({
             inv_track_item = row
 
         try:
-            supply_item = getattr(row, "supply_item")
-            volume = supply_item.volume
+            supply_item_pack = getattr(row, "supply_item_pack")
+            volume = supply_item_pack.volume
         except AttributeError:
-            # Need to load the supply item
+            # Need to load the supply item pack
             # Avoid this by adding to extra_fields
             ttable = current.s3db.inv_track_item
-            stable = current.s3db.supply_item
+            ptable = current.s3db.supply_item_pack
             query = (ttable.id == inv_track_item.id) & \
-                    (ttable.item_id == stable.id)
-            supply_item = current.db(query).select(stable.volume,
-                                                   limitby = (0, 1),
-                                                   ).first()
-            volume = supply_item.volume if supply_item else None
+                    (ttable.item_pack_id == ptable.id)
+            supply_item_pack = current.db(query).select(ptable.volume,
+                                                        limitby = (0, 1),
+                                                        ).first()
+            volume = supply_item_pack.volume if supply_item_pack else None
 
         if volume is None:
             return current.messages["NONE"]
@@ -2038,22 +2027,7 @@ $.filterOptionsS3({
                                                       ).first()
             quantity = inv_track_item[qfield]
 
-        try:
-            supply_item_pack = getattr(row, "supply_item_pack")
-            pack_quantity = supply_item_pack.quantity
-        except AttributeError:
-            # Need to load the supply item pack
-            # Avoid this by adding to extra_fields
-            ttable = current.s3db.inv_track_item
-            ptable = current.s3db.supply_item_pack
-            query = (ttable.id == inv_track_item.id) & \
-                    (ttable.item_pack_id == ptable.id)
-            supply_item_pack = current.db(query).select(ptable.quantity,
-                                                        limitby = (0, 1),
-                                                        ).first()
-            pack_quantity = supply_item_pack.quantity
-
-        return round(quantity * pack_quantity * volume, 3)
+        return round(quantity * volume, 3)
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -2066,19 +2040,19 @@ $.filterOptionsS3({
             inv_track_item = row
 
         try:
-            supply_item = getattr(row, "supply_item")
-            weight = supply_item.weight
+            supply_item_pack = getattr(row, "supply_item_pack")
+            weight = supply_item_pack.weight
         except AttributeError:
-            # Need to load the supply item
+            # Need to load the supply item pack
             # Avoid this by adding to extra_fields
             ttable = current.s3db.inv_track_item
-            stable = current.s3db.supply_item
+            ptable = current.s3db.supply_item_pack
             query = (ttable.id == inv_track_item.id) & \
-                    (ttable.item_id == stable.id)
-            supply_item = current.db(query).select(stable.weight,
-                                                   limitby = (0, 1),
-                                                   ).first()
-            weight = supply_item.weight if supply_item else None
+                    (ttable.item_pack_id == ptable.id)
+            supply_item_pack = current.db(query).select(ptable.weight,
+                                                        limitby = (0, 1),
+                                                        ).first()
+            weight = supply_item_pack.weight if supply_item_pack else None
 
         if weight is None:
             return current.messages["NONE"]
@@ -2100,22 +2074,7 @@ $.filterOptionsS3({
                                                       ).first()
             quantity = inv_track_item[qfield]
 
-        try:
-            supply_item_pack = getattr(row, "supply_item_pack")
-            pack_quantity = supply_item_pack.quantity
-        except AttributeError:
-            # Need to load the supply item pack
-            # Avoid this by adding to extra_fields
-            ttable = current.s3db.inv_track_item
-            ptable = current.s3db.supply_item_pack
-            query = (ttable.id == inv_track_item.id) & \
-                    (ttable.item_pack_id == ptable.id)
-            supply_item_pack = current.db(query).select(ptable.quantity,
-                                                        limitby = (0, 1),
-                                                        ).first()
-            pack_quantity = supply_item_pack.quantity
-
-        return round(quantity * pack_quantity * weight, 2)
+        return round(quantity * weight, 2)
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -2247,8 +2206,8 @@ $.filterOptionsS3({
         T = current.T
         list_fields = [(T("Item Code"), "item_id$code"),
                        "item_id",
-                       (T("Weight (kg)"), "item_id$weight"),
-                       (T("Volume (m3)"), "item_id$volume"),
+                       (T("Weight (kg)"), "item_pack_id$weight"),
+                       (T("Volume (m3)"), "item_pack_id$volume"),
                        "bin",
                        "item_source_no",
                        "item_pack_id",
@@ -2409,8 +2368,8 @@ $.filterOptionsS3({
         record = table[r.id]
         recv_ref = record.recv_ref
         list_fields = ["item_id",
-                       (T("Weight (kg)"), "item_id$weight"),
-                       (T("Volume (m3)"), "item_id$volume"),
+                       (T("Weight (kg)"), "item_pack_id$weight"),
+                       (T("Volume (m3)"), "item_pack_id$volume"),
                        "item_source_no",
                        "item_pack_id",
                        "quantity",
@@ -4272,19 +4231,19 @@ def inv_item_total_weight(row):
         inv_item = row
 
     try:
-        supply_item = getattr(row, "supply_item")
-        weight = supply_item.weight
+        supply_item_pack = getattr(row, "supply_item_pack")
+        weight = supply_item_pack.weight
     except AttributeError:
-        # Need to load the supply item
+        # Need to load the supply item pack
         # Avoid this by adding to extra_fields
         itable = current.s3db.inv_inv_item
-        stable = current.s3db.supply_item
+        ptable = current.s3db.supply_item_pack
         query = (itable.id == inv_item.id) & \
-                (itable.item_id == stable.id)
-        supply_item = current.db(query).select(stable.weight,
-                                               limitby = (0, 1),
-                                               ).first()
-        weight = supply_item.weight if supply_item else None
+                (itable.item_pack_id == ptable.id)
+        supply_item_pack = current.db(query).select(ptable.weight,
+                                                    limitby = (0, 1),
+                                                    ).first()
+        weight = supply_item_pack.weight if supply_item_pack else None
 
     if weight is None:
         return current.messages["NONE"]
@@ -4301,22 +4260,7 @@ def inv_item_total_weight(row):
                                             ).first()
         quantity = inv_item.quantity
 
-    try:
-        supply_item_pack = getattr(row, "supply_item_pack")
-        pack_quantity = supply_item_pack.quantity
-    except AttributeError:
-        # Need to load the supply item pack
-        # Avoid this by adding to extra_fields
-        itable = current.s3db.inv_inv_item
-        ptable = current.s3db.supply_item_pack
-        query = (itable.id == inv_item.id) & \
-                (itable.item_pack_id == ptable.id)
-        supply_item_pack = current.db(query).select(ptable.quantity,
-                                                    limitby = (0, 1),
-                                                    ).first()
-        pack_quantity = supply_item_pack.quantity
-
-    return round(quantity * pack_quantity * weight, 3)
+    return round(quantity * weight, 3)
 
 # -----------------------------------------------------------------------------
 def inv_item_total_volume(row):
@@ -4333,19 +4277,19 @@ def inv_item_total_volume(row):
         inv_item = row
 
     try:
-        supply_item = getattr(row, "supply_item")
-        volume = supply_item.volume
+        supply_item_pack = getattr(row, "supply_item_pack")
+        volume = supply_item_pack.volume
     except AttributeError:
-        # Need to load the supply item
+        # Need to load the supply item pack
         # Avoid this by adding to extra_fields
         itable = current.s3db.inv_inv_item
-        stable = current.s3db.supply_item
+        ptable = current.s3db.supply_item_pack
         query = (itable.id == inv_item.id) & \
-                (itable.item_id == stable.id)
-        supply_item = current.db(query).select(stable.volume,
-                                               limitby = (0, 1),
-                                               ).first()
-        volume = supply_item.volume if supply_item else None
+                (itable.item_pack_id == ptable.id)
+        supply_item_pack = current.db(query).select(ptable.volume,
+                                                    limitby = (0, 1),
+                                                    ).first()
+        volume = supply_item_pack.volume if supply_item_pack else None
 
     if volume is None:
         return current.messages["NONE"]
@@ -4362,22 +4306,7 @@ def inv_item_total_volume(row):
                                             ).first()
         quantity = inv_item.quantity
 
-    try:
-        supply_item_pack = getattr(row, "supply_item_pack")
-        pack_quantity = supply_item_pack.quantity
-    except AttributeError:
-        # Need to load the supply item pack
-        # Avoid this by adding to extra_fields
-        itable = current.s3db.inv_inv_item
-        ptable = current.s3db.supply_item_pack
-        query = (itable.id == inv_item.id) & \
-                (itable.item_pack_id == ptable.id)
-        supply_item_pack = current.db(query).select(ptable.quantity,
-                                                    limitby = (0, 1),
-                                                    ).first()
-        pack_quantity = supply_item_pack.quantity
-
-    return round(quantity * pack_quantity * volume, 2)
+    return round(quantity * volume, 2)
 
 # -----------------------------------------------------------------------------
 def inv_stock_movements(resource, selectors, orderby):

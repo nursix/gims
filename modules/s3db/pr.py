@@ -52,7 +52,6 @@ __all__ = (# PR Base Entities
 
            # S3 Models
            "PRImageLibraryModel",
-           "PRSavedFilterModel",
 
            # Representation Methods
            "pr_get_entities",
@@ -106,7 +105,6 @@ __all__ = (# PR Base Entities
            # Data List Default Layouts
            #"pr_address_list_layout",
            #"pr_contact_list_layout",
-           #"pr_filter_list_layout",
            )
 
 import json
@@ -115,7 +113,7 @@ import os
 from urllib.parse import urlencode
 
 from gluon import current, redirect, URL, \
-                  A, DIV, H2, H3, H5, IMG, LABEL, P, SPAN, TABLE, TAG, TH, TR, \
+                  A, DIV, H2, H3, IMG, LABEL, P, SPAN, TABLE, TAG, TH, TR, \
                   IS_LENGTH, IS_EMPTY_OR, IS_IN_SET, IS_NOT_EMPTY, IS_EMAIL, \
                   IS_INT_IN_RANGE
 from gluon.storage import Storage
@@ -248,20 +246,6 @@ class PRPersonEntityModel(DataModel):
                                      #    "contact_method": "WORK_PHONE",
                                      #    },
                                      # },
-                                     # Facebook:
-                                     {"name": "facebook",
-                                      "joinby": pe_id,
-                                      "filterby": {
-                                          "contact_method": "FACEBOOK",
-                                          },
-                                      },
-                                     # Twitter:
-                                     {"name": "twitter",
-                                      "joinby": pe_id,
-                                      "filterby": {
-                                          "contact_method": "TWITTER",
-                                          },
-                                      },
                                      ),
                        pr_contact_emergency = pe_id,
                        pr_contact_person = pe_id,
@@ -913,18 +897,18 @@ class PRPersonModel(DataModel):
             ]
 
         # CRUD Form
-        crud_form = S3SQLCustomForm("first_name",
-                                    "middle_name",
-                                    "last_name",
-                                    "person_details.year_of_birth",
-                                    "date_of_birth",
-                                    "gender",
-                                    "person_details.marital_status",
-                                    "person_details.nationality",
-                                    "person_details.religion",
-                                    "person_details.occupation",
-                                    "comments",
-                                    )
+        crud_form = CustomForm("first_name",
+                               "middle_name",
+                               "last_name",
+                               "person_details.year_of_birth",
+                               "date_of_birth",
+                               "gender",
+                               "person_details.marital_status",
+                               "person_details.nationality",
+                               "person_details.religion",
+                               "person_details.occupation",
+                               "comments",
+                               )
 
         # Resource configuration
         self.configure(tablename,
@@ -1166,6 +1150,14 @@ class PRPersonModel(DataModel):
                        med_anamnesis = {"joinby": "person_id",
                                         "multiple": False,
                                         },
+                       med_vitals = "person_id",
+                       med_status = {"name": "med_status",
+                                     "joinby": "person_id",
+                                     },
+                       med_analysis = {"name": "med_analysis",
+                                       "joinby": "person_id",
+                                       },
+                       med_treatment = "person_id",
 
                        # Seized Items (owner)
                        security_seized_item = "person_id",
@@ -1207,6 +1199,7 @@ class PRPersonModel(DataModel):
                        dvr_case_language = "person_id",
                        dvr_response_action = "person_id",
                        dvr_allowance = "person_id",
+                       dvr_grant = "person_id",
                        dvr_note = {"name": "case_note",
                                    "joinby": "person_id",
                                    },
@@ -1263,37 +1256,52 @@ class PRPersonModel(DataModel):
 
     # -------------------------------------------------------------------------
     @staticmethod
-    def pr_age(row, months=False):
+    def pr_age(person, months=False):
         """
-            Compute the age of a person
+            Compute the age of a person (current age, or age at death if deceased)
 
             Args:
-                row: a Row containing the person record
+                person: a Row containing the person record
                 months: return the age in months rather than years
 
             Returns:
                 age in years or months (integer)
         """
 
-        if hasattr(row, "pr_person"):
-            row = row.pr_person
-        if hasattr(row, "date_of_birth"):
-            dob = row.date_of_birth
-        elif hasattr(row, "id"):
-            # date_of_birth not in row: reload the record
+        if hasattr(person, "pr_person"):
+            person = person.pr_person
+
+        age = dob = None
+
+        # Check if all relevant fields are available,
+        # otherwise attempt to reload the record
+        fields = ("date_of_birth", "deceased", "date_of_death")
+        if not all(hasattr(person, fn) for fn in fields) and hasattr(person, "id"):
             table = current.s3db.pr_person
-            person = current.db(table.id == row.id).select(
-                                                     table.date_of_birth,
-                                                     limitby=(0, 1)).first()
-            dob = person.date_of_birth if person else None
-        else:
-            dob = None
-        if dob:
+            row = current.db(table.id == person.id).select(table.date_of_birth,
+                                                           table.deceased,
+                                                           table.date_of_death,
+                                                           limitby = (0, 1),
+                                                           ).first()
+            if row:
+                person = row
+
+        # Determine the date of birth
+        if hasattr(person, "date_of_birth"):
+            dob = person.date_of_birth
+
+        # Determine date of death if person is known to be deceased
+        deceased = person.deceased if hasattr(person, "deceased") else False
+        dod = person.date_of_death if deceased and hasattr(person, "date_of_death") else None
+
+        # Compute age if possible
+        reference = dod if dod else current.request.utcnow.date()
+        if dob and reference:
             from dateutil.relativedelta import relativedelta
-            delta = relativedelta(current.request.utcnow.date(), dob)
-            return delta.months if months else delta.years
-        else:
-            return None
+            delta = relativedelta(reference, dob)
+            age = delta.months if months else delta.years
+
+        return age
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -2058,7 +2066,7 @@ class PRPersonModel(DataModel):
 
         # If no results then search other fields
         # @ToDo: Do these searches anyway & merge results together
-        if not len(rows):
+        if not rows:
             rfilter = resource.rfilter
             if dob:
                 # Try DoB
@@ -2071,7 +2079,7 @@ class PRPersonModel(DataModel):
                 rows = resource.select(fields=fields,
                                        start=0,
                                        limit=MAX_SEARCH_RESULTS)["rows"]
-            if not len(rows) and email:
+            if not rows and email:
                 # Try Email
                 # Remove the name or DoB filter (last one in)
                 rfilter.filters.pop()
@@ -2082,7 +2090,7 @@ class PRPersonModel(DataModel):
                 rows = resource.select(fields=fields,
                                        start=0,
                                        limit=MAX_SEARCH_RESULTS)["rows"]
-            if not len(rows) and mobile_phone:
+            if not rows and mobile_phone:
                 # Try Mobile Phone
                 # Remove the name or DoB or email filter (last one in)
                 rfilter.filters.pop()
@@ -2093,7 +2101,7 @@ class PRPersonModel(DataModel):
                 rows = resource.select(fields=fields,
                                        start=0,
                                        limit=MAX_SEARCH_RESULTS)["rows"]
-            if not len(rows) and home_phone:
+            if not rows and home_phone:
                 # Try Home Phone
                 # Remove the name or DoB or email or mobile filter (last one in)
                 rfilter.filters.pop()
@@ -2470,6 +2478,14 @@ class PRGroupModel(DataModel):
                                               ),
                             event_team = "group_id",
 
+                            # Needs
+                            req_need_service = {"link": "req_need_service_team",
+                                                "joinby": "group_id",
+                                                "key": "need_service_id",
+                                                "actuate": "hide",
+                                                "autodelete": False,
+                                                },
+
                             # Organisations
                             org_organisation = {"link": "org_organisation_team",
                                                 "joinby": "group_id",
@@ -2478,6 +2494,12 @@ class PRGroupModel(DataModel):
                                                 "autodelete": False,
                                                 },
                             org_organisation_team = "group_id",
+                            org_service = {"link": "org_team_service",
+                                           "joinby": "group_id",
+                                           "key": "service_id",
+                                           "actuate": "hide",
+                                           "autodelete": False,
+                                           },
 
                             # Posts
                             cms_post = {"link": "cms_post_team",
@@ -2885,8 +2907,10 @@ class PRGroupTagModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        #return {}
 
 # =============================================================================
 class PRForumModel(DataModel):
@@ -3592,7 +3616,7 @@ class PRContactModel(DataModel):
                            readable = False,
                            writable = False,
                            ),
-                     # Used to determine whether an RSS/Facebook/Twitter feed should be imported into the main newsfeed
+                     # Used to determine whether an RSS feed should be imported into the main newsfeed
                      # (usually used for Organisational ones)
                      Field("poll", "boolean",
                            default = False,
@@ -3884,7 +3908,7 @@ class PRImageModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -4326,7 +4350,7 @@ class PRAvailabilityModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -4486,7 +4510,7 @@ class PRUnavailabilityModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class PRDescriptionModel(DataModel):
@@ -5108,7 +5132,7 @@ class PREducationModel(DataModel):
         # ---------------------------------------------------------------------
         # Return model-global names to response.s3
         #
-        return None
+        #return {}
 
 # =============================================================================
 class PRIdentityModel(DataModel):
@@ -5268,7 +5292,7 @@ class PRIdentityModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class PRLanguageModel(DataModel):
@@ -5331,7 +5355,7 @@ class PRLanguageModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class PROccupationModel(DataModel):
@@ -5422,7 +5446,7 @@ class PROccupationModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class PRPersonDetailsModel(DataModel):
@@ -5639,8 +5663,10 @@ class PRPersonTagModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        #return {}
 
 # =============================================================================
 class PRImageLibraryModel(DataModel):
@@ -5727,90 +5753,6 @@ class PRImageLibraryModel(DataModel):
         dbset = db(table.original_name == original_image_name)
         dbset.delete_uploaded_files()
         dbset.delete()
-
-# =============================================================================
-class PRSavedFilterModel(DataModel):
-    """ Saved Filters """
-
-    # TODO replace by usr_filter
-
-    names = ("pr_filter",
-             "pr_filter_id",
-             )
-
-    def model(self):
-
-        T = current.T
-
-        # ---------------------------------------------------------------------
-        tablename = "pr_filter"
-        self.define_table(tablename,
-                          self.super_link("pe_id", "pr_pentity"),
-                          Field("title"),
-                          # Controller/Function/Resource/URL are used just
-                          # for Saved Filters
-                          Field("controller"),
-                          Field("function"),
-                          Field("resource"), # tablename
-                          Field("url"),
-                          Field("description", "text"),
-                          # Query is used for both Saved Filters and Subscriptions
-                          # Can use a Context to have this work across multiple
-                          # resources if a simple selector is insufficient
-                          Field("query", "text"),
-                          Field("serverside", "json",
-                                readable = False,
-                                writable = False,
-                                ),
-                          CommentsField(),
-                          )
-
-        represent = S3Represent(lookup=tablename, fields=["title"])
-        filter_id = FieldTemplate("filter_id", "reference %s" % tablename,
-                                  label = T("Filter"),
-                                  ondelete = "SET NULL",
-                                  represent = represent,
-                                  requires = IS_EMPTY_OR(
-                                                IS_ONE_OF(current.db, "pr_filter.id",
-                                                          represent,
-                                                          orderby="pr_filter.title",
-                                                          sort=True,
-                                                          )),
-                                  )
-
-        self.configure(tablename,
-                       listadd = False,
-                       list_fields = ["title",
-                                      "resource",
-                                      "url",
-                                      "query",
-                                      ],
-                       list_layout = pr_filter_list_layout,
-                       onvalidation = self.pr_filter_onvalidation,
-                       orderby = "pr_filter.resource",
-                       )
-
-        # ---------------------------------------------------------------------
-        # Pass names back to global scope (s3.*)
-        #
-        return {"pr_filter_id": filter_id,
-                }
-
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def pr_filter_onvalidation(form):
-        """
-            Ensure that JSON can be loaded by json.loads()
-        """
-
-        query = form.vars.get("query", None)
-        if query:
-            query = query.replace("'", "\"")
-            try:
-                json.loads(query)
-            except ValueError as e:
-                form.errors.query = "%s: %s" % (current.T("Query invalid"), e)
-            form.vars.query = query
 
 # =============================================================================
 # Representation Methods
@@ -6445,10 +6387,8 @@ class pr_PersonRepresentContact(pr_PersonRepresent):
         except AttributeError:
             pass
         else:
-            if self.show_email:
-                email = self._email.get(pe_id)
-            if self.show_phone:
-                phone = self._phone.get(pe_id)
+            email = self._email.get(pe_id) if self.show_email else None
+            phone = self._phone.get(pe_id) if self.show_phone else None
             if email or phone:
                 details = DIV(_class="contact-details")
                 if email:
@@ -6656,7 +6596,7 @@ class pr_ContactRepresent(S3Represent):
                  show_link = True,
                  ):
         """
-            Show a Contact with appropriate hyperlinks if Facebook or Twitter
+            Show a Contact with appropriate hyperlinks
 
             Args:
                 see super
@@ -6690,19 +6630,7 @@ class pr_ContactRepresent(S3Represent):
         if not k:
             return v
 
-        if v.startswith("http"):
-            return A(v, _href=v)
-
-        contact_method = row.contact_method
-        if contact_method == "TWITTER":
-            url = "http://twitter.com/%s" % v
-            return A(v, _href=url)
-        elif contact_method == "FACEBOOK":
-            url = "http://%s" % v
-            return A(v, _href=url)
-        else:
-            # No link
-            return v
+        return A(v, _href=v) if v.startswith("http") else v
 
     # -------------------------------------------------------------------------
     def represent_row(self, row):
@@ -7369,6 +7297,7 @@ def pr_compose():
     #    url = URL(f="group", args=record_id)
 
     else:
+        pe_id = title = url = None
         current.session.error = current.T("Record not found")
         redirect(URL(f="index"))
 
@@ -7383,8 +7312,7 @@ def pr_compose():
     #        redirect(URL(f="index"))
 
     # Create the form
-    output = current.msg.compose(recipient = pe_id,
-                                 url = url)
+    output = current.msg.compose(recipient=pe_id, url=url)
 
     output["title"] = title
 
@@ -7407,8 +7335,6 @@ class pr_Contacts(CRUDMethod):
                 "HOME_PHONE": 4,
                 "SKYPE": 5,
                 "RADIO": 6,
-                "TWITTER": 7,
-                "FACEBOOK": 8,
                 "WHATSAPP": 9,
                 "FAX": 10,
                 "OTHER": 11,
@@ -7928,7 +7854,6 @@ def pr_group_update_affiliations(record):
     for m in current_memberships:
         group, person = m
         pr_add_affiliation(group, person, role=MEMBERS, role_type=OU)
-    return
 
 # =============================================================================
 def pr_human_resource_update_affiliations(person_id):
@@ -8180,9 +8105,8 @@ def pr_get_pe_id(entity, record_id=None):
                                                       ).first()
             else:
                 return None
-    if record:
-        return record.pe_id
-    return None
+
+    return record.pe_id if record else None
 
 # =============================================================================
 # Back-end Role Tools
@@ -8219,7 +8143,8 @@ def pr_define_role(pe_id,
             "role": role,
             "role_type": role_type,
             "entity_type": entity_type,
-            "sub_type": sub_type}
+            "sub_type": sub_type,
+            }
 
     rtable = s3db.pr_role
     if role:
@@ -8271,7 +8196,8 @@ def pr_add_to_role(role_id, pe_id):
     query = (atable.role_id == role_id) & \
             (atable.pe_id == pe_id)
     affiliation = current.db(query).select(atable.id,
-                                           limitby=(0, 1)).first()
+                                           limitby = (0, 1),
+                                           ).first()
     if affiliation is None:
         # Insert affiliation record
         atable.insert(role_id=role_id, pe_id=pe_id)
@@ -8301,7 +8227,8 @@ def pr_remove_from_role(role_id, pe_id):
         data = {"deleted": True,
                 "role_id": None,
                 "pe_id": None,
-                "deleted_fk": json.dumps(deleted_fk)}
+                "deleted_fk": json.dumps(deleted_fk),
+                }
         affiliation.update_record(**data)
 
         # Clear descendant paths
@@ -8324,7 +8251,7 @@ def pr_get_role_paths(pe_id, roles=None, role_types=None):
             role_types: list of role types to limit the search
 
         Reutrns:
-            a Storage() of S3MultiPaths with the role names as keys
+            a dict of S3MultiPaths with the role names as keys
 
         Note:
             role_types is ignored if roles gets specified
@@ -8354,7 +8281,7 @@ def pr_get_role_paths(pe_id, roles=None, role_types=None):
                                     rtable.pe_id,
                                     )
 
-    role_paths = Storage()
+    role_paths = {}
     for role in rows:
         name = role.role
         if name in role_paths:
@@ -8466,6 +8393,7 @@ def pr_get_path(pe_id):
         path.extend(role.pe_id, ppath, cut=pe_id)
         for p in path.paths:
             append(p)
+
     return multipath.clean()
 
 # =============================================================================
@@ -8505,9 +8433,8 @@ def pr_get_ancestors(pe_id):
             ppath = S3MultiPath(role.path)
         path.extend(role.pe_id, ppath, cut=pe_id)
         append(path)
-    ancestors = S3MultiPath.all_nodes(paths)
 
-    return ancestors
+    return [int(n) for n in S3MultiPath.all_nodes(paths)]
 
 # =============================================================================
 def pr_instance_type(pe_id):
@@ -8518,14 +8445,17 @@ def pr_instance_type(pe_id):
             pe_id: the PE ID
     """
 
+    instance_type = None
+
     if pe_id:
         etable = current.s3db.pr_pentity
         row = current.db(etable.pe_id == pe_id).select(etable.instance_type,
-                                                       limitby = (0, 1)
+                                                       limitby = (0, 1),
                                                        ).first()
         if row:
-            return row.instance_type
-    return None
+            instance_type = row.instance_type
+
+    return instance_type
 
 # =============================================================================
 def pr_default_realms(entity):
@@ -8548,8 +8478,8 @@ def pr_default_realms(entity):
             (rtable.deleted != True) & \
             (rtable.role_type == OU)
     rows = current.db(query).select(rtable.pe_id)
-    realms = [row.pe_id for row in rows]
-    return realms
+
+    return [row.pe_id for row in rows]
 
 # =============================================================================
 def pr_realm_users(realm, roles=None, role_types=OU):
@@ -8596,10 +8526,8 @@ def pr_realm_users(realm, roles=None, role_types=OU):
                  (ltable.user_id == utable.id) & \
                  (utable.deleted != True)
     rows = current.db(query).select(utable.id, utable[userfield])
-    if rows:
-        return Storage([(row.id, row[userfield]) for row in rows])
-    else:
-        return Storage()
+
+    return {row.id: row[userfield] for row in rows}
 
 # =============================================================================
 def pr_ancestors(entities):
@@ -8611,11 +8539,12 @@ def pr_ancestors(entities):
             entities: List of PE IDs
 
         Returns:
-            Storage of lists of PE IDs
+            dict of lists of PE IDs
     """
 
     if not entities:
-        return Storage()
+        return {}
+    ancestors = {pe_id: [] for pe_id in entities}
 
     s3db = current.s3db
     atable = s3db.pr_affiliation
@@ -8629,8 +8558,8 @@ def pr_ancestors(entities):
                                     rtable.pe_id,
                                     rtable.path,
                                     rtable.role_type,
-                                    atable.pe_id)
-    ancestors = Storage([(pe_id, []) for pe_id in entities])
+                                    atable.pe_id,
+                                    )
     r = rtable._tablename
     a = atable._tablename
     for row in rows:
@@ -8645,7 +8574,7 @@ def pr_ancestors(entities):
         path.extend(role.pe_id, ppath, cut=pe_id)
         paths.append(path)
     for pe_id in ancestors:
-        ancestors[pe_id] = S3MultiPath.all_nodes(ancestors[pe_id])
+        ancestors[pe_id] = [int(n) for n in S3MultiPath.all_nodes(ancestors[pe_id])]
     return ancestors
 
 # =============================================================================
@@ -8667,9 +8596,7 @@ def pr_descendants(pe_ids, skip=None, root=True):
     if skip is None:
         skip = set()
 
-    # We still need to support Py 2.6
-    #pe_ids = {i for i in pe_ids if i not in skip}
-    pe_ids = set(i for i in pe_ids if i not in skip)
+    pe_ids = {i for i in pe_ids if i not in skip}
     if not pe_ids:
         return {}
 
@@ -8684,26 +8611,21 @@ def pr_descendants(pe_ids, skip=None, root=True):
     query = (q & (rtable.role_type == OU) & (rtable.deleted != True)) & \
             ((atable.role_id == rtable.id) & (atable.deleted != True)) & \
             (etable.pe_id == atable.pe_id)
-
     rows = current.db(query).select(rtable.pe_id,
                                     atable.pe_id,
-                                    etable.instance_type)
+                                    etable.instance_type,
+                                    )
     r = rtable._tablename
     e = etable._tablename
     a = atable._tablename
 
     nodes = set()
-    ogetattr = object.__getattribute__
-
     result = {}
 
     skip.update(pe_ids)
     for row in rows:
-
-        parent = ogetattr(ogetattr(row, r), "pe_id")
-        child = ogetattr(ogetattr(row, a), "pe_id")
-        instance_type = ogetattr(ogetattr(row, e), "instance_type")
-        if instance_type != "pr_person":
+        parent, child = row[r].pe_id, row[a].pe_id
+        if row[e].instance_type != "pr_person":
             if parent not in result:
                 result[parent] = []
             result[parent].append(child)
@@ -8747,9 +8669,8 @@ def pr_get_descendants(pe_ids, entity_types=None, skip=None, ids=True):
 
     if not pe_ids:
         return []
-    if type(pe_ids) is not set:
-        pe_ids = set(pe_ids) \
-                 if isinstance(pe_ids, (list, tuple)) else {pe_ids}
+    if not isinstance(pe_ids, set):
+        pe_ids = set(pe_ids) if isinstance(pe_ids, (list, tuple)) else {pe_ids}
 
     db = current.db
     s3db = current.s3db
@@ -8784,12 +8705,13 @@ def pr_get_descendants(pe_ids, entity_types=None, skip=None, ids=True):
         descendants = pr_get_descendants(node_ids,
                                          skip = skip,
                                          entity_types = entity_types,
-                                         ids = False)
+                                         ids = False,
+                                         )
         result.update(descendants)
 
     if ids:
         if entity_types is not None:
-            if type(entity_types) is not set:
+            if not isinstance(entity_types, set):
                 if not isinstance(entity_types, (tuple, list)):
                     entity_types = {entity_types}
                 else:
@@ -8825,7 +8747,8 @@ def pr_rebuild_path(pe_id, clear=False):
     roles = db(query).select(rtable.id,
                              rtable.pe_id,
                              rtable.path,
-                             rtable.role_type)
+                             rtable.role_type,
+                             )
     for role in roles:
         if role.path is None:
             pr_role_rebuild_path(role, clear=clear)
@@ -8927,6 +8850,10 @@ def pr_image_modify(image_file,
             pil_imported = True
         except ImportError:
             pil_imported = False
+    try:
+        ANTIALIAS = Image.LANCZOS
+    except AttributeError:
+        ANTIALIAS = Image.ANTIALIAS
 
     if pil_imported:
         from tempfile import TemporaryFile
@@ -8947,7 +8874,7 @@ def pr_image_modify(image_file,
         else:
             thumb_size.append(size[1])
         try:
-            im.thumbnail(thumb_size, Image.ANTIALIAS)
+            im.thumbnail(thumb_size, ANTIALIAS)
         except IOError:
             # Maybe need to reinstall pillow:
             #pip uninstall pillow
@@ -9130,7 +9057,7 @@ def pr_address_list_layout(list_id, item_id, resource, rfields, record):
         l = raw.get("gis_location.%s" % level, None)
         if l:
             locations.append(l)
-    if len(locations):
+    if locations:
         location = " | ".join(locations)
         location = P(ICON("globe"),
                      " ",
@@ -9250,10 +9177,6 @@ def pr_contact_list_layout(list_id, item_id, resource, rfields, record):
         icon = "mail"
     elif contact_method == "SKYPE":
         icon = "skype"
-    elif contact_method == "FACEBOOK":
-        icon = "facebook"
-    elif contact_method == "TWITTER":
-        icon = "twitter"
     elif contact_method == "RADIO":
         icon = "microphone"
     elif contact_method == "RSS":
@@ -9747,144 +9670,6 @@ class pr_PersonSearchAutocomplete(CRUDMethod):
         response.headers["Content-Type"] = "application/json"
         return json.dumps(output, separators=JSONSEPARATORS)
 
-# =============================================================================
-def pr_filter_list_layout(list_id, item_id, resource, rfields, record):
-    """
-        Default dataList item renderer for Saved Filters
-
-        Args:
-            list_id: the HTML ID of the list
-            item_id: the HTML ID of the item
-            resource: the CRUDResource to render
-            rfields: the S3ResourceFields to render
-            record: the record as dict
-    """
-
-    record_id = record["pr_filter.id"]
-    item_class = "thumbnail"
-
-    raw = record._row
-
-    T = current.T
-    resource_name = raw["pr_filter.resource"]
-    resource = current.s3db.resource(resource_name)
-
-    # Resource title
-    crud_strings = current.response.s3.crud_strings.get(resource.tablename)
-    if crud_strings:
-        resource_name = crud_strings.title_list
-    else:
-        resource_name = " ".join(s.capitalize() for s in resource.name.split("_"))
-
-    # Filter title
-    title = record["pr_filter.title"]
-
-    # Filter Query
-    fstring = URLQueryJSON(resource, raw["pr_filter.query"])
-    query = fstring.represent()
-
-    # Actions
-    actions = filter_actions(resource,
-                             raw["pr_filter.url"],
-                             fstring.get_vars)
-
-    # Render the item
-    item = DIV(DIV(DIV(actions,
-                       _class = "action-bar fleft",
-                       ),
-                   SPAN(T("%(resource)s Filter") % \
-                        {"resource": resource_name},
-                        _class = "card-title",
-                        ),
-                    DIV(A(ICON("delete"),
-                          _title = T("Delete this Filter"),
-                          _class = "dl-item-delete",
-                          ),
-                        _class = "edit-bar fright",
-                        ),
-                   _class = "card-header",
-                   ),
-               DIV(DIV(H5(title,
-                          _id = "filter-title-%s" % record_id,
-                          _class = "media-heading jeditable",
-                          ),
-                       DIV(query),
-                       _class = "media-body",
-                       ),
-                   _class = "media",
-                   ),
-               _class = item_class,
-               _id = item_id,
-               )
-
-    return item
-
-# -----------------------------------------------------------------------------
-def filter_actions(resource, url, filters):
-    """
-        Helper to construct the actions for a saved filter.
-
-        Args:
-            resource: the CRUDResource
-            url: the filter page URL
-            filters: the filter GET vars
-    """
-
-    if not url:
-        return ""
-
-    T = current.T
-    actions = []
-    append = actions.append
-    tablename = resource.tablename
-    filter_actions = current.s3db.get_config(tablename, "filter_actions")
-    if filter_actions:
-        controller, fn = tablename.split("_", 1)
-        for action in filter_actions:
-            c = action.get("controller", controller)
-            f = action.get("function", fn)
-            m = action.get("method", None)
-            if m:
-                args = [m]
-            else:
-                args = []
-            e = action.get("format", None)
-            link = URL(c=c, f=f,
-                       args = args,
-                       extension = e,
-                       vars = filters,
-                       )
-            append(A(ICON(action.get("icon", "other")),
-                     _title = T(action.get("label", "Open")),
-                     _href = link,
-                     ))
-    else:
-        # Default to using Summary Tabs
-        links = summary_urls(resource, url, filters)
-        if links:
-            if "map" in links:
-                append(A(ICON("globe"),
-                         _title = T("Open Map"),
-                         _href = links["map"],
-                         ))
-            if "table" in links:
-                append(A(ICON("table"),
-                         _title = T("Open Table"),
-                         _href = links["table"],
-                         ))
-            if "chart" in links:
-                append(A(ICON("bar-chart"),
-                         _title = T("Open Chart"),
-                         _href = links["chart"],
-                         ))
-            if "report" in links:
-                append(A(ICON("bar-chart"),
-                         _title = T("Open Report"),
-                         _href = links["report"],
-                         ))
-
-    return actions
-
 # -----------------------------------------------------------------------------
 def summary_urls(resource, url, filters):
     """
@@ -9907,7 +9692,7 @@ def summary_urls(resource, url, filters):
     for (k, v) in get_vars.items():
         if v is None:
             continue
-        values = v if type(v) is list else [v]
+        values = v if isinstance(v, list) else [v]
         for value in values:
             if value is not None:
                 list_vars.append((k, value))

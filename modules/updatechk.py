@@ -35,7 +35,7 @@ from gluon.fileutils import parse_version
 class UpdateCheck:
 
     # This is the current version of requirements
-    REQUIREMENTS = 5
+    REQUIREMENTS = 7
 
     # This is the required version of models/000_config.py
     CONFIG = 1
@@ -90,25 +90,23 @@ class UpdateCheck:
                 tuple of lists of strings (errors, warnings)
         """
 
-        # We require web2py-2.21.1 or later for PyDAL compatibility
-        web2py_minimum_version = "Version 2.21.2-stable+timestamp.2021.10.15.07.44.23"
+        supported_versions = ("3.1.1", "3.2.2", "3.3.1", "3.3.2", "3.3.3")
 
         version_ok = True
         try:
-            required = parse_version(web2py_minimum_version)[4]
-
-            with open("VERSION", "r") as version:
-                web2py_installed_version = version.read().split()[-1].strip()
-            installed = parse_version(web2py_installed_version)[4]
-
-            version_ok = installed >= required
+            cur_version = current.request.global_settings.web2py_version
+            installed = ".".join(map(str, parse_version(cur_version)[:3]))
+            version_ok = installed in supported_versions
         except AttributeError:
+            installed = "?.?.?"
             version_ok = False
 
         if not version_ok:
-            msg = "\n".join(("The installed version of Web2py is too old to support the current version of Eden.",
-                             "Please upgrade Web2py to at least version: %s" % web2py_minimum_version,
-                             ))
+            supported = ", ".join(supported_versions)
+            msg = "\n".join((
+                        f"The installed version {installed} of web2py is not supported.",
+                        f"Please use one of the following versions: {supported}",
+                        ))
             errors = [msg]
         else:
             errors = []
@@ -190,7 +188,7 @@ class UpdateCheck:
         edited_pattern = r"FINISHED_EDITING_\w*\s*=\s*(True|False)"
         edited_matcher = re.compile(edited_pattern).match
         has_edited = False
-        with open(dst_path) as f:
+        with open(dst_path, encoding="utf-8") as f:
             for line in f:
                 edited_result = edited_matcher(line)
                 if edited_result:
@@ -205,7 +203,7 @@ class UpdateCheck:
         version_pattern = r"VERSION =\s*([0-9]+)"
         version_matcher = re.compile(version_pattern).match
         has_version = False
-        with open(dst_path) as f:
+        with open(dst_path, encoding="utf-8") as f:
             for line in f:
                 version_result = version_matcher(line)
                 if version_result:
@@ -234,7 +232,7 @@ class UpdateCheck:
         """
 
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 dependencies = f.read().splitlines()
                 msg = ""
                 for dependency in dependencies:
@@ -273,8 +271,8 @@ class UpdateCheck:
                 dst_path: the destination path
         """
 
-        with open(src_path) as src:
-            with open(dst_path, "w") as dst:
+        with open(src_path, encoding="utf-8") as src:
+            with open(dst_path, "w", encoding="utf-8") as dst:
                 for line in src:
                     if "akeytochange" in line:
                         # Generate a random hmac_key to secure the passwords in case

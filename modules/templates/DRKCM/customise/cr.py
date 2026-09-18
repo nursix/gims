@@ -69,7 +69,6 @@ def cr_shelter_population():
     stable = s3db.dvr_case_status
     join = stable.on(stable.id == ctable.status_id)
     left = dtable.on((dtable.person_id == ctable.person_id) & \
-                     ((dtable.case_id == None) | (dtable.case_id == ctable.id)) & \
                      (dtable.deleted == False))
     today = current.request.utcnow.date()
     query = (ctable.site_id != None) & \
@@ -106,7 +105,7 @@ def cr_shelter_resource(r, tablename):
     auth = current.auth
 
     from core import LocationSelector, \
-                     S3SQLCustomForm
+                     CustomForm
 
     # Field configurations
     table = s3db.cr_shelter
@@ -126,14 +125,14 @@ def cr_shelter_resource(r, tablename):
                                     )
 
     # Custom form
-    crud_form = S3SQLCustomForm("name",
-                                "organisation_id",
-                                "shelter_type_id",
-                                "location_id",
-                                "phone",
-                                "status",
-                                "comments",
-                                )
+    crud_form = CustomForm("name",
+                           "organisation_id",
+                           "shelter_type_id",
+                           "location_id",
+                           "phone",
+                           "status",
+                           "comments",
+                           )
 
 
     # Custom list fields
@@ -200,8 +199,8 @@ def cr_shelter_controller(**attr):
     s3.prep = custom_prep
 
     # Custom rheader
-    from ..rheaders import drk_cr_rheader
-    attr["rheader"] = drk_cr_rheader
+    from ..rheaders import cr_rheader
+    attr["rheader"] = cr_rheader
 
     return attr
 

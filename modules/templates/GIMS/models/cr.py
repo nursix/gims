@@ -42,7 +42,7 @@ from gluon.storage import Storage
 
 from core import CustomController, CRUDMethod, DataModel, DateField, FS, \
                  S3Report, S3Duplicate, LocationSelector, S3PriorityRepresent, \
-                 S3Represent, FieldTemplate, S3SQLCustomForm, \
+                 S3Represent, FieldTemplate, CustomForm, \
                  IS_ONE_OF, IS_PHONE_NUMBER_MULTI, \
                  get_form_record_id, CommentsField, \
                  s3_str, get_filter_options, represent_occupancy, \
@@ -298,27 +298,27 @@ class CRReceptionCenterModel(DataModel):
             allocable_capacity = "allocable_capacity"
             free_allocable_capacity = None
 
-        crud_form = S3SQLCustomForm(# ---- Facility ----
-                                    "organisation_id",
-                                    "name",
-                                    "type_id",
-                                    "status",
-                                    # ---- Address ----
-                                    "location_id",
-                                    # ---- Capacity & Population ----
-                                    "capacity",
-                                    "allocable_capacity_estimate",
-                                    allocable_capacity,
-                                    "population_registered",
-                                    "population_unregistered",
-                                    free_allocable_capacity,
-                                    # ---- Contact Information ----
-                                    "contact_name",
-                                    "phone",
-                                    "email",
-                                    # ---- Comments ----
-                                    "comments",
-                                    )
+        crud_form = CustomForm(# ---- Facility ----
+                               "organisation_id",
+                               "name",
+                               "type_id",
+                               "status",
+                               # ---- Address ----
+                               "location_id",
+                               # ---- Capacity & Population ----
+                               "capacity",
+                               "allocable_capacity_estimate",
+                               allocable_capacity,
+                               "population_registered",
+                               "population_unregistered",
+                               free_allocable_capacity,
+                               # ---- Contact Information ----
+                               "contact_name",
+                               "phone",
+                               "email",
+                               # ---- Comments ----
+                               "comments",
+                               )
 
         subheadings = {"organisation_id": T("Facility"),
                        "location_id": T("Address"),
@@ -982,7 +982,7 @@ class CapacityOverview(CRUDMethod):
         for facility in facilities:
             facility_id = facility.id
             query = (stable.facility_id == facility_id) & \
-                    (stable.date < start) & \
+                    (stable.date <= start) & \
                     (stable.deleted == False)
             initial = db(query).select(stable.status,
                                        stable.population,
@@ -998,7 +998,7 @@ class CapacityOverview(CRUDMethod):
         # Lookup all subsequent status entries and fill the matrix
         query = (stable.facility_id.belongs(population.keys())) & \
                 (stable.date != None) & \
-                (stable.date >= start) & \
+                (stable.date > start) & \
                 (stable.deleted == False)
         rows = db(query).select(stable.facility_id,
                                 stable.date,

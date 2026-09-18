@@ -48,13 +48,21 @@ def config(settings):
     #settings.auth.registration_requires_verification = True
     # Do new users need to be approved by an administrator prior to being able to login?
     #settings.auth.registration_requires_approval = True
+    # Do not send welcome emails to newly registered users
+    settings.auth.registration_welcome_email = False
+    # New user registration requires selection of organisation
     settings.auth.registration_requests_organisation = True
+    # Automatically register new users as staff members of their organisation
     settings.auth.registration_link_user_to = {"staff": T("Staff"),
                                                #"volunteer": T("Volunteer"),
                                                }
     settings.auth.registration_link_user_to_default = ["staff"]
     # Disable password-retrieval feature
     settings.auth.password_retrieval = False
+    # Types of entities for which roles can be assigned
+    settings.auth.realm_entity_types = ("org_group",
+                                        "org_organisation",
+                                        )
 
     # Approval emails get sent to all admins
     settings.mail.approver = "ADMIN"
@@ -125,16 +133,20 @@ def config(settings):
     # Version details on About-page require login
     settings.security.version_info_requires_login = True
 
+    # Generic format REST API requests are restricted to ADMINs
+    settings.security.restapi_restricted = True
+
     # -------------------------------------------------------------------------
     # Defaults for custom settings
     #
     settings.custom.autogenerate_case_ids = True
+    settings.custom.manage_work_orders = True
 
-    settings.custom.context_org_name = "Eden ASP"
+    settings.custom.context_org_name = "Sahana Eden"
 
-    settings.custom.org_menu_logo = ("MRCMS", "img", "eden_asp_small.png")
-    settings.custom.homepage_logo = ("MRCMS", "img", "eden_asp_large.png")
-    settings.custom.idcard_default_logo = ("MRCMS", "img", "eden_asp_small.png")
+    settings.custom.org_menu_logo = ("MRCMS", "img", "eden_small.png")
+    settings.custom.homepage_logo = ("MRCMS", "img", "eden_large.png")
+    settings.custom.idcard_default_logo = ("MRCMS", "img", "eden_small.png")
 
     # -------------------------------------------------------------------------
     # General UI settings
@@ -156,15 +168,19 @@ def config(settings):
                                       "STAFF": ("ORG_GROUP_ADMIN", "ORG_ADMIN"),
                                       "CASE_ADMIN": "ORG_ADMIN",
                                       "CASE_MANAGER": "ORG_ADMIN",
+                                      "CASE_ASSISTANT": "ORG_ADMIN",
                                       "SECURITY": "ORG_ADMIN",
                                       "CATERING": "ORG_ADMIN",
                                       "ISSUE_REPORTER": "ORG_ADMIN",
                                       "SHELTER_ADMIN": ("ORG_GROUP_ADMIN", "SHELTER_ADMIN"),
-                                      "SHELTER_MANAGER": ("ORG_GROUP_ADMIN", "SHELTER_ADMIN"),
+                                      "SHELTER_MANAGER": "SHELTER_ADMIN",
                                       "SUPPLY_ADMIN": ("ORG_GROUP_ADMIN", "SUPPLY_ADMIN"),
-                                      "SUPPLY_MANAGER": ("ORG_GROUP_ADMIN", "SUPPLY_ADMIN"),
+                                      "SUPPLY_MANAGER": "SUPPLY_ADMIN",
+                                      "MED_ADMIN": ("ORG_GROUP_ADMIN", "MED_ADMIN"),
+                                      "MED_PRACTITIONER": "MED_ADMIN",
+                                      "MED_ASSISTANT": "MED_ADMIN",
+                                      "MED_READER": "MED_ADMIN",
                                       # These are restricted for now until better-defined
-                                      "CASE_ASSISTANT": "ADMIN",
                                       "QUARTERMASTER": "ADMIN",
                                       "JANITOR": "ADMIN",
                                       "CHECKPOINT": "ADMIN",
@@ -248,6 +264,12 @@ def config(settings):
     # DOC Settings and Customizations
     #
     from .helpers import user_mailmerge_fields, shelter_mailmerge_fields
+
+    settings.doc.permitted_extensions = ("pdf", "doc", "docx", "odt",
+                                         "csv", "xls", "xlsx", "ods",
+                                         "png", "jpg", "jpeg", "bmp", "tiff",
+                                         "txt", "rtf",
+                                         )
 
     settings.doc.mailmerge_fields = {"ID": "pe_label",
                                      "Vorname": "first_name",
@@ -390,6 +412,7 @@ def config(settings):
                                dvr_need_resource, \
                                dvr_case_activity_resource, \
                                dvr_case_activity_controller, \
+                               dvr_response_type_resource, \
                                dvr_response_action_resource, \
                                dvr_response_action_controller, \
                                dvr_case_appointment_resource, \
@@ -406,21 +429,25 @@ def config(settings):
 
     settings.customise_dvr_home = dvr_home
     settings.customise_dvr_case_resource = dvr_case_resource
+
     settings.customise_dvr_need_resource = dvr_need_resource
     settings.customise_dvr_case_activity_resource = dvr_case_activity_resource
     settings.customise_dvr_case_activity_controller = dvr_case_activity_controller
+
+    settings.customise_dvr_response_type_resource = dvr_response_type_resource
     settings.customise_dvr_response_action_resource = dvr_response_action_resource
     settings.customise_dvr_response_action_controller = dvr_response_action_controller
+
     settings.customise_dvr_case_appointment_resource = dvr_case_appointment_resource
     settings.customise_dvr_case_appointment_controller = dvr_case_appointment_controller
+
+    settings.customise_dvr_case_event_type_resource = dvr_case_event_type_resource
+    settings.customise_dvr_case_event_type_controller = dvr_case_event_type_controller
     settings.customise_dvr_case_event_resource = dvr_case_event_resource
     settings.customise_dvr_case_event_controller = dvr_case_event_controller
 
     settings.customise_dvr_case_appointment_type_controller = dvr_case_appointment_type_controller
-    settings.customise_dvr_case_event_type_resource = dvr_case_event_type_resource
-    settings.customise_dvr_case_event_type_controller = dvr_case_event_type_controller
     settings.customise_dvr_case_flag_controller = dvr_case_flag_controller
-
     settings.customise_dvr_note_resource = dvr_note_resource
     settings.customise_dvr_task_controller = dvr_task_controller
     settings.customise_dvr_service_contact_resource = dvr_service_contact_resource
@@ -444,6 +471,15 @@ def config(settings):
     #
     settings.inv.facility_label = "Facility"
     settings.inv.facility_manage_staff = False
+
+    # -------------------------------------------------------------------------
+    # MED Module Settings
+    #
+    from .customise.med import med_patient_resource, \
+                               med_patient_controller
+
+    settings.customise_med_patient_resource = med_patient_resource
+    settings.customise_med_patient_controller = med_patient_controller
 
     # -------------------------------------------------------------------------
     # Organisations Module Settings

@@ -140,7 +140,7 @@ def config(settings):
     #
     settings.ui.calendar_clear_icon = True
 
-    #settings.ui.auto_open_update = True
+    settings.ui.auto_open_update = False
     #settings.ui.inline_cancel_edit = "submit"
 
     #settings.ui.organizer_snap_duration = "00:10:00"
@@ -181,6 +181,12 @@ def config(settings):
     # -------------------------------------------------------------------------
     # Document settings
     #
+    settings.doc.permitted_extensions = ("pdf", "doc", "docx", "odt",
+                                         "csv", "xls", "xlsx", "ods",
+                                         "png", "jpg", "jpeg", "bmp", "tiff",
+                                         "txt", "rtf",
+                                         )
+
     settings.doc.mailmerge_fields = {"ID": "pe_label",
                                      "Vorname": "first_name",
                                      "Name": "last_name",

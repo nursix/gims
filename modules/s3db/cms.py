@@ -655,8 +655,7 @@ class CMSContentModel(DataModel):
         tablename = "cms_comment"
         define_table(tablename,
                      Field("parent", "reference cms_comment",
-                           requires = IS_EMPTY_OR(
-                                        IS_ONE_OF(db, "cms_comment.id")),
+                           requires = IS_EMPTY_OR(IS_IN_DB(db, "%s.id" % tablename)),
                            readable = False,
                            ),
                      post_id(empty = False),
@@ -1097,7 +1096,7 @@ class CMSContentForumModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class CMSContentMapModel(DataModel):
@@ -1121,7 +1120,7 @@ class CMSContentMapModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class CMSContentOrgModel(DataModel):
@@ -1149,7 +1148,7 @@ class CMSContentOrgModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class CMSContentOrgGroupModel(DataModel):
@@ -1173,7 +1172,7 @@ class CMSContentOrgGroupModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class CMSContentTeamModel(DataModel):
@@ -1201,7 +1200,7 @@ class CMSContentTeamModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class CMSContentUserModel(DataModel):
@@ -1225,7 +1224,7 @@ class CMSContentUserModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class CMSContentRoleModel(DataModel):
@@ -1264,7 +1263,7 @@ class CMSContentRoleModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        #return {}
 
 # =============================================================================
 class CMSNewsletterModel(DataModel):
@@ -1355,27 +1354,31 @@ class CMSNewsletterModel(DataModel):
                            readable = False,
                            writable = False,
                            ),
-                     Field.Method("read_status", self.newsletter_read_status),
+                     s3_fieldmethod("read_status",
+                                    self.newsletter_read_status,
+                                    represent = lambda v, row=None: \
+                                                "-" if v is None else v if hasattr(v, "xml") else s3_str(v),
+                                    ),
                      CommentsField(),
                      )
 
         # Components
         self.add_components(tablename,
                             cms_newsletter_recipient = "newsletter_id",
-                            pr_filter = {"name": "distribution",
-                                         "link": "cms_newsletter_distribution",
-                                         "joinby": "newsletter_id",
-                                         "key": "filter_id",
-                                         # TODO filter by resource?
-                                         },
+                            usr_filter = {"name": "distribution",
+                                          "link": "cms_newsletter_distribution",
+                                          "joinby": "newsletter_id",
+                                          "key": "saved_filter_id",
+                                          # TODO filter by resource?
+                                          },
                             )
 
         # CRUD Form
-        crud_form = S3SQLCustomForm(
+        crud_form = CustomForm(
                         "organisation_id",
                         "subject",
                         "message",
-                        S3SQLInlineComponent(
+                        InlineComponent(
                             "document",
                             name = "file",
                             label = T("Attachments"),
@@ -1519,12 +1522,12 @@ class CMSNewsletterModel(DataModel):
 
         # ---------------------------------------------------------------------
         # Saved filters as distribution list
-        # - link table pr_filter <> cms_newsletter
+        # - link table usr_filter <> cms_newsletter
         #
         tablename = "cms_newsletter_distribution"
         define_table(tablename,
                      Field("newsletter_id", "reference cms_newsletter"),
-                     self.pr_filter_id(),
+                     self.usr_filter_id("saved_filter_id"),
                      )
 
         # ---------------------------------------------------------------------
@@ -1541,7 +1544,7 @@ class CMSNewsletterModel(DataModel):
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
         #
-        return None
+        # return None
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -1921,9 +1924,9 @@ class cms_UpdateNewsletter(CRUDMethod):
         recipients = set()
 
         ltable = s3db.cms_newsletter_distribution
-        ftable = s3db.pr_filter
+        ftable = s3db.usr_filter
 
-        join = ftable.on(ftable.id == ltable.filter_id)
+        join = ftable.on(ftable.id == ltable.saved_filter_id)
         query = (ltable.newsletter_id == newsletter_id) & \
                 (ltable.deleted == False)
         filters = db(query).select(ftable.controller,
@@ -2635,8 +2638,7 @@ def cms_index(module,
                 response.headers.setdefault(key, value)
             raise HTTP(response.status, page, **response.headers)
 
-        else:
-            item = H2(page_name)
+        item = H2(page_name)
 
     if view is not None:
         view = os.path.join(*(view.split("/")))
@@ -3482,6 +3484,8 @@ class cms_Calendar(CRUDMethod):
                 attr: controller arguments
         """
 
+        output = None
+
         if r.name == "post":
             if r.representation == "html":
                 output = self.html(r, **attr)
@@ -3657,6 +3661,8 @@ class cms_TagList(CRUDMethod):
                 r: the CRUDRequest
                 attr: controller arguments
         """
+
+        output = None
 
         if r.representation == "json":
             table = current.s3db.cms_tag

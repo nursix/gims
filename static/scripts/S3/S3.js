@@ -252,14 +252,81 @@ S3.popup_remove = function() {
     // - called from s3.popup.js but in parent scope
     $('iframe.ui-dialog-content').dialog('close');
 };
+S3.addDownloads = function() {
+    /**
+     * Click-handler for s3-download-buttons:
+     *
+     * - any action item with a class 's3-download-button' and
+     *   a 'url' data property (data-url)
+     *
+     * - for download of server-generated attachments, e.g. XLS or PDF
+     *
+     * - downloads the target document in a hidden iframe, which, if
+     *   the file is sent with content-disposition "attachment", will
+     *   only open the file dialog and nothing else
+     *
+     * - if this fails, the response will be opened in a modal dialog
+     *   (JSON messages will be handled with a simple alert-box, though)
+     */
+    $('.s3-download-button').off('click').on('click', function(e) {
+
+        // Do nothing else
+        e.preventDefault();
+        e.stopPropagation();
+
+        var url = $(this).data('url');
+        if (!url) {
+            return;
+        }
+
+        // Re-use it if it already exists
+        var iframe = document.getElementById("s3-download");
+        if (iframe == null) {
+            iframe = document.createElement('iframe');
+            iframe.id = "s3-download";
+            iframe.style.visibility = 'hidden';
+            document.body.appendChild(iframe);
+        }
+
+        $('#s3-download').off('load').on('load', function() {
+            // This event is only fired when contents was loaded into the
+            // hidden iframe rather than downloaded as attachment, which
+            // should only happen if there was some kind of error
+            var message,
+                self = $(this);
+            try {
+                // Try to parse the JSON message
+                message = JSON.parse(this.contentDocument.body.textContent).message;
+            } catch(e) {
+                // No JSON message => show iframe contents as-is in a modal
+                self.dialog({
+                    title: 'Download failed',
+                    width: 500,
+                    height: 300,
+                    close: function() {
+                        self.attr('src', '').remove();
+                    }
+                }).css({
+                    visibility: 'visible',
+                    width: '100%'
+                });
+                return;
+            }
+            alert(message);
+        });
+
+        iframe.src = url;
+        return false;
+    });
+};
 
 // Functions to re-run after new page elements are brought in via AJAX
 // - an be added-to dynamically
-S3.redraw_fns = [// jQueryUI Dialog Modal Popups
-                 'addModals',
-                 // Help Tooltips
-                 'addTooltips'
-                 ];
+S3.redraw_fns = [
+    'addModals',
+    'addTooltips',
+    'addDownloads'
+];
 S3.redraw = function() {
     var redraw_fns = S3.redraw_fns;
     var len = redraw_fns.length;
@@ -506,6 +573,7 @@ var S3EnableNavigateAwayConfirm = function() {
         // Callbacks
         this.successCallback = ajaxOptions.success;
         this.errorCallback = ajaxOptions.error;
+        this.completeCallback = ajaxOptions.always;
 
         // Prevent callbacks from being executed by $.ajax itself
         options.success = null;
@@ -649,6 +717,27 @@ var S3EnableNavigateAwayConfirm = function() {
     };
 
     /**
+     * Complete-callback
+     *
+     * NB: executed in the context of the options object passed
+     *     to $.ajax (=this), which holds the AjaxS3 instance as
+     *     'AjaxS3' property
+     */
+    AjaxS3.prototype.onComplete = function() {
+
+        // Get the instance form context
+        var self = this.AjaxS3;
+        if (!self) {
+            return;
+        }
+
+        var completeCallback = self.completeCallback;
+        if (completeCallback) {
+            completeCallback.apply(this, arguments);
+        }
+    };
+
+    /**
      * Start processing this instance
      * - shows initial activity message
      * - sends the request
@@ -691,6 +780,8 @@ var S3EnableNavigateAwayConfirm = function() {
             this.AjaxS3.onSuccess.apply(this, arguments);
         }).fail(function() {
             this.AjaxS3.onFailure.apply(this, arguments);
+        }).always(function() {
+            this.AjaxS3.onComplete.apply(this, arguments);
         });
     };
 
@@ -962,8 +1053,8 @@ S3.openPopup = function(url, center) {
      * @param {string} setting.prefix - the inline form prefix (default: 'default')
      * @param {string} setting.alias - the component alias for the inline form (e.g. task_project)
      * @param {string} setting.name - the field name
-     * @param {string} setting.inlineType - the inline form type, 'link' (for S3SQLInlineLink),
-     *                                      or 'sub' (for other S3SQLInlineComponent types)
+     * @param {string} setting.inlineType - the inline form type, 'link' (for InlineLink),
+     *                                      or 'sub' (for other InlineComponent types)
      * @param {string} setting.inlineRows - the inline form has multiple rows, default: true
      */
     var getSelector = function(setting) {
@@ -2123,71 +2214,6 @@ S3.reloadWithQueryStringVars = function(queryStringVars) {
             }
         });
 
-        /**
-         * Click-handler for s3-download-buttons:
-         *
-         * - any action item with a class 's3-download-button' and
-         *   a 'url' data property (data-url)
-         *
-         * - for download of server-generated attachments, e.g. XLS or PDF
-         *
-         * - downloads the target document in a hidden iframe, which, if
-         *   the file is sent with content-disposition "attachment", will
-         *   only open the file dialog and nothing else
-         *
-         * - if this fails, the response will be opened in a modal dialog
-         *   (JSON messages will be handled with a simple alert-box, though)
-         */
-        $('.s3-download-button').on('click', function(e) {
-
-            // Do nothing else
-            e.preventDefault();
-            e.stopPropagation();
-
-            var url = $(this).data('url');
-            if (!url) {
-                return;
-            }
-
-            // Re-use it if it already exists
-            var iframe = document.getElementById("s3-download");
-            if (iframe == null) {
-               iframe = document.createElement('iframe');
-               iframe.id = "s3-download";
-               iframe.style.visibility = 'hidden';
-               document.body.appendChild(iframe);
-            }
-
-            $('#s3-download').off('load').on('load', function() {
-                // This event is only fired when contents was loaded into the
-                // hidden iframe rather than downloaded as attachment, which
-                // should only happen if there was some kind of error
-                var message,
-                    self = $(this);
-                try {
-                    // Try to parse the JSON message
-                    message = JSON.parse(this.contentDocument.body.textContent).message;
-                } catch(e) {
-                    // No JSON message => show iframe contents as-is in a modal
-                    self.dialog({
-                        title: 'Download failed',
-                        width: 500,
-                        height: 300,
-                        close: function() {
-                            self.attr('src', '').remove();
-                        }
-                    }).css({
-                        visibility: 'visible',
-                        width: '100%'
-                    });
-                    return;
-                }
-                alert(message);
-            });
-
-            iframe.src = url;
-            return false;
-        });
     });
 
 }());

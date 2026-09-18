@@ -327,7 +327,9 @@ class S3Config(Storage):
                 # Import the template
                 template = getattr(__import__(package, fromlist=[config]), config)
             except ImportError as e:
-                raise RuntimeError("Template not found: %s" % name) from e
+                raise RuntimeError(f"Template '{name}' not found") from e
+            except AttributeError as e:
+                raise RuntimeError(f"Invalid template '{name}'") from e
             template.config(self)
 
         return self
@@ -368,6 +370,13 @@ class S3Config(Storage):
             s3.theme_styles = path_to(styles.split("."))
         else:
             s3.theme_styles = theme_path
+
+        # Path under static/themes/ for favicon.ico
+        iconpath = self.base.get("theme_favicon")
+        if iconpath:
+            s3.theme_favicon = path_to(iconpath.split("."))
+        else:
+            s3.theme_favicon = s3.theme_styles
 
         # Path under modules/templates/ for css.cfg
         config = self.base.get("theme_config")
@@ -427,6 +436,19 @@ class S3Config(Storage):
             self.set_theme()
             styles = current.response.s3.theme_styles
         return styles
+
+    def get_theme_favicon(self):
+        """
+            The location of the shortcut icon:
+            - static/themes/[theme_favicon]/favicon.ico
+
+            => defaults to theme
+        """
+        iconpath = current.response.s3.theme_favicon
+        if not iconpath:
+            self.set_theme()
+            iconpath = current.response.s3.theme_favicon
+        return iconpath
 
     def get_theme_config(self):
         """
@@ -503,13 +525,6 @@ class S3Config(Storage):
         return module_name in self.modules
 
     # -------------------------------------------------------------------------
-    def get_facebook_pixel_id(self):
-        """
-            Facebook Pixel ID
-        """
-        return self.base.get("facebook_pixel_id")
-
-    # -------------------------------------------------------------------------
     def get_google_analytics_tracking_id(self):
         """
             Google Analytics Key
@@ -562,6 +577,28 @@ class S3Config(Storage):
                 - False         : do not log failed logins
         """
         return self.auth.get("log_failed_logins", False)
+
+    def get_auth_max_failed_logins(self):
+        """
+            Maximum number of tolerated failed login attempts to
+            a user account before the account is locked
+            - None meaning: no maximum
+        """
+        max_failed_logins = self.auth.get("max_failed_logins", None)
+        if isinstance(max_failed_logins, int) and max_failed_logins > 0:
+            return max_failed_logins
+        return None
+
+    def get_auth_failed_login_lock_timeout(self):
+        """
+            Timeout for the lock after an account has been locked due to
+            too many login attempts
+            - None meaning: locking is permanent, manual reset required
+        """
+        lock_timeout = self.auth.get("failed_login_lock_timeout", 300)
+        if isinstance(lock_timeout, int) and lock_timeout > 0:
+            return lock_timeout
+        return None
 
     def get_auth_password_changes(self):
         """
@@ -989,6 +1026,12 @@ class S3Config(Storage):
         """
         return self.security.get("version_info_requires_login", False)
 
+    def get_security_restapi_restricted(self):
+        """
+            Whether generic format REST API requests are restricted to ADMINs
+        """
+        return self.security.get("restapi_restricted", False)
+
     def get_security_archive_not_delete(self):
         return self.security.get("archive_not_delete", True)
 
@@ -1019,13 +1062,13 @@ class S3Config(Storage):
         """
             System Name - for the UI & Messaging
         """
-        return self.base.get("system_name", current.T("Eden ASP"))
+        return self.base.get("system_name", current.T("Sahana Eden"))
 
     def get_system_name_short(self):
         """
             System Name (Short Version) - for the UI & Messaging
         """
-        return self.base.get("system_name_short", "Eden ASP")
+        return self.base.get("system_name_short", "Sahana Eden")
 
     def get_base_debug(self):
         """
@@ -2213,18 +2256,24 @@ class S3Config(Storage):
     def get_ui_auto_open_update(self):
         """
             Render "Open" action buttons in datatables without explicit
-            CRUD-method => this allows automatic per-record decision
-            whether to open as update- or read-form based on permissions,
-            e.g. if the user doesn't have permission to update for all
-            records in the datatable due to oACL or realm-restriction
+            CRUD-method, to allow automatic per-record decision whether
+            to open as update- or read-form based on permissions (e.g.
+            if the user has update-permission for only some of the records
+            in the datatable).
+
+            Note:
+                - can be overridden per-resource.
         """
-        return self.ui.get("auto_open_update", False)
+        return self.ui.get("auto_open_update", True)
 
     def get_ui_open_read_first(self):
         """
             Render "Open" action buttons with explicit "read" method
             irrespective permissions (i.e. always, even if the user
-            were permitted to edit records)
+            were permitted to edit records).
+
+            Note:
+                - can be overridden per-resource.
         """
         return self.ui.get("open_read_first", False)
 
@@ -2566,7 +2615,7 @@ class S3Config(Storage):
 
     def get_ui_inline_component_layout(self):
         """
-            Layout for S3SQLInlineComponent
+            Layout for InlineComponent
         """
         # Use this to also catch old-style classes (not recommended):
         #import types
@@ -2574,8 +2623,8 @@ class S3Config(Storage):
 
         layout = self.ui.get("inline_component_layout")
         if not layout:
-            from core import S3SQLSubFormLayout
-            layout = S3SQLSubFormLayout()
+            from core import SubFormLayout
+            layout = SubFormLayout()
         elif isinstance(layout, type):
             # Instantiate only now when it's actually requested
             # (because it may inject JS which is not needed if unused)
@@ -2633,7 +2682,7 @@ class S3Config(Storage):
         return self.__lazy("ui", "menu_logo",
                            URL(c = "static",
                                f = "img",
-                               args = ["eden_asp_small.png"],
+                               args = ["eden_small.png"],
                                )
                            )
 
@@ -2983,15 +3032,6 @@ class S3Config(Storage):
 
         return self.cap.get("restrict_fields", False)
 
-    def get_cap_post_to_twitter(self):
-        """
-            Whether to post the alerts in twitter
-            @ToDo: enhance this by as well as True,
-            being able to specify a specific Twitter channel to tweet on
-        """
-
-        return self.cap.get("post_to_twitter", False)
-
     def get_cap_same_code(self):
         """
             Name of the tag that will be used to lookup in the gis_location_tag
@@ -2999,13 +3039,6 @@ class S3Config(Storage):
         """
 
         return self.cap.get("same_code")
-
-    def get_cap_post_to_facebook(self):
-        """
-            Whether to post the alerts in facebook
-        """
-
-        return self.cap.get("post_to_facebook", False)
 
     def get_cap_rss_use_links(self):
         """
@@ -3259,15 +3292,6 @@ class S3Config(Storage):
         """
         return self.__lazy("deploy", "member_filters", default=None)
 
-    def get_deploy_post_to_twitter(self):
-        """
-            Whether to post the alerts in twitter
-            @ToDo: enhance this by as well as True,
-            being able to specify a specific Twitter channel to tweet on
-        """
-
-        return self.deploy.get("post_to_twitter", False)
-
     def get_deploy_responses_via_web(self):
         """
             Whether Responses to Alerts come in via the Web
@@ -3333,6 +3357,15 @@ class S3Config(Storage):
                                                  "Last Name": "last_name",
                                                  "Date of Birth": "date_of_birth",
                                                  })
+
+    def get_doc_permitted_extensions(self):
+        """
+            Permitted file extensions for upload documents
+            - a string or compiled regex, or a list thereof
+            - e.g. ["pdf", "docx", "xlsx"]
+            - None (default) means all extensions allowed
+        """
+        return self.doc.get("permitted_extensions")
 
     # -------------------------------------------------------------------------
     # DVR Options
@@ -4404,12 +4437,6 @@ class S3Config(Storage):
         """
         return self.inv.get("direct_stock_edits", False)
 
-    def get_inv_org_dependent_warehouse_types(self):
-        """
-            Whether Warehouse Types vary by Organisation
-        """
-        return self.inv.get("org_dependent_warehouse_types", False)
-
     def get_inv_send_show_mode_of_transport(self):
         """
             Show mode of transport on Sent Shipments
@@ -4503,12 +4530,6 @@ class S3Config(Storage):
     def get_inv_recv_shortname(self):
         return self.inv.get("recv_shortname", "GRN")
 
-    def get_inv_warehouse_code_unique(self):
-        """
-            Validate for Unique Warehouse Codes
-        """
-        return self.inv.get("warehouse_code_unique", False)
-
     # -------------------------------------------------------------------------
     # IRS
     #
@@ -4525,7 +4546,37 @@ class S3Config(Storage):
         """
             Terminology to use for treatment areas (room|area)
         """
-        return self.med.get("area_label", "room")
+        return self.med.get("area_label", "area")
+
+    def get_med_area_over_capacity(self):
+        """
+            How to handle area assignments of patients when the
+            area is occupied over capacity:
+                "accept" - accept assignment
+                "warn" - accept assignment with a warning
+                "refuse" - refuse assignment
+        """
+        return self.med.get("area_over_capacity", "warn")
+
+    def get_med_risk_class_calculation(self):
+        """
+            Which vital sign risk stratifier to use
+            - True to use default stratifier class (s3db.med.RiskClass)
+        """
+        return self.__lazy("med", "risk_class_calculation", default=True)
+
+    def get_med_use_pe_label(self):
+        """
+            Use the PE label to identify persons in MED module
+        """
+        return self.med.get("use_pe_label", True)
+
+    def get_med_restrict_person_search_to(self):
+        """
+            Modules which persons must be linked to when registering
+            new treatment occasions for them
+        """
+        return self.med.get("restrict_patients_to", ("dvr",))
 
     # -------------------------------------------------------------------------
     # Members
@@ -5043,6 +5094,16 @@ class S3Config(Storage):
         """
         return self.__lazy("pr", "name_format", default="%(first_name)s %(middle_name)s %(last_name)s")
 
+    def get_pr_name_fields(self):
+        """
+            Returns the relevant name fields, in order of the name format
+        """
+        from core import StringTemplateParser
+
+        NAMES = ("first_name", "middle_name", "last_name")
+        keys = StringTemplateParser.keys(self.get_pr_name_format())
+        return [fn for fn in keys if fn in NAMES]
+
     def get_pr_search_shows_hr_details(self):
         """
             Whether S3PersonAutocompleteWidget results show the details of their HR record
@@ -5093,7 +5154,7 @@ class S3Config(Storage):
                     }
 
         tabs = self.get_pr_contacts_tabs()
-        label = tabs.get(group) if type(tabs) is dict else None
+        label = tabs.get(group) if isinstance(tabs, dict) else None
 
         if label is None:
             # Use default label

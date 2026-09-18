@@ -36,11 +36,13 @@ from gluon.languages import lazyT
 from gluon.storage import Storage
 from gluon.tools import callback
 
+from s3dal import original_tablename, filter_fields
+
 from ..resource import DataExporter
 from ..tools import JSONSEPARATORS, S3DateTime, get_crud_string, \
                     s3_decode_iso_datetime, s3_represent_value, \
                     s3_set_extension, s3_str, s3_validate
-from ..ui import S3EmbeddedComponentWidget, LocationSelector, ICON, S3SQLDefaultForm
+from ..ui import S3EmbeddedComponentWidget, LocationSelector, ICON, DefaultForm
 
 from .base import CRUDMethod
 
@@ -53,7 +55,7 @@ class BasicCRUD(CRUDMethod):
         super().__init__()
 
         self.settings = current.response.s3.crud
-        self.sqlform = None
+        self.form = None
         self.data = None
 
     # -------------------------------------------------------------------------
@@ -81,8 +83,8 @@ class BasicCRUD(CRUDMethod):
                 output object to send to the view
         """
 
-        sqlform = self.resource.get_config("crud_form")
-        self.sqlform = sqlform if sqlform else S3SQLDefaultForm()
+        form = self.resource.get_config("crud_form")
+        self.form = form if form else DefaultForm()
 
         # Pre-populate create-form?
         self.data = None
@@ -96,13 +98,13 @@ class BasicCRUD(CRUDMethod):
             elif isinstance(populate, dict):
                 self.data = populate
 
+        output = None
         method = self.method
 
         if r.http == "DELETE" or self.method == "delete":
             output = self.delete(r, **attr)
 
         elif method == "create":
-
             output = self.create(r, **attr)
 
         elif method == "read":
@@ -139,6 +141,7 @@ class BasicCRUD(CRUDMethod):
                 output = self.review(r, **attr)
             else:
                 output = self.unapproved(r, **attr)
+
         else:
             r.error(405, current.ERROR.BAD_METHOD)
 
@@ -160,8 +163,8 @@ class BasicCRUD(CRUDMethod):
 
         # Settings
         self.settings = current.response.s3.crud
-        sqlform = self.resource.get_config("crud_form")
-        self.sqlform = sqlform if sqlform else S3SQLDefaultForm()
+        form = self.resource.get_config("crud_form")
+        self.form = form if form else DefaultForm()
 
         attr = Storage(attr)
         attr["list_id"] = widget_id
@@ -409,21 +412,21 @@ class BasicCRUD(CRUDMethod):
                 self._default_cancel_button(r)
 
             # Get the form
-            output["form"] = self.sqlform(request = request,
-                                          resource = resource,
-                                          data = self.data,
-                                          record_id = original,
-                                          from_table = from_table,
-                                          from_record = from_record,
-                                          map_fields = map_fields,
-                                          onvalidation = onvalidation,
-                                          onaccept = onaccept,
-                                          link = link,
-                                          hierarchy = hierarchy,
-                                          message = message,
-                                          subheadings = subheadings,
-                                          format = representation,
-                                          )
+            output["form"] = self.form(request = request,
+                                       resource = resource,
+                                       data = self.data,
+                                       record_id = original,
+                                       from_table = from_table,
+                                       from_record = from_record,
+                                       map_fields = map_fields,
+                                       onvalidation = onvalidation,
+                                       onaccept = onaccept,
+                                       link = link,
+                                       hierarchy = hierarchy,
+                                       message = message,
+                                       subheadings = subheadings,
+                                       format = representation,
+                                       )
 
             # Navigate-away confirmation
             if self.settings.navigate_away_confirm:
@@ -472,15 +475,16 @@ class BasicCRUD(CRUDMethod):
             subheadings = get_config("subheadings")
             output["title"] = get_crud_string(tablename, "label_create")
             output["details_btn"] = ""
-            output["item"] = self.sqlform(request = request,
-                                          resource = resource,
-                                          data = self.data,
-                                          onvalidation = onvalidation,
-                                          onaccept = onaccept,
-                                          #link = link,
-                                          message = message,
-                                          subheadings = subheadings,
-                                          format = representation)
+            output["item"] = self.form(request = request,
+                                       resource = resource,
+                                       data = self.data,
+                                       onvalidation = onvalidation,
+                                       onaccept = onaccept,
+                                       #link = link,
+                                       message = message,
+                                       subheadings = subheadings,
+                                       format = representation,
+                                       )
 
         elif representation == "csv":
             import csv
@@ -643,10 +647,9 @@ class BasicCRUD(CRUDMethod):
             else:
                 empty = False
 
-            # Redirect to update if user has permission unless
-            # a method has been specified in the URL
-            # MH: Is this really desirable? Many users would prefer to open as read
-            if not r.method: #or r.method == "review":
+            # Redirect to update if user has permission unless method was
+            # specified explicitly or default-read is enforced
+            if not r.method and self._default_editable(table) == "auto":
                 authorised = self._permitted("update")
                 if authorised and representation == "html" and editable:
                     return self.update(r, **attr)
@@ -674,13 +677,13 @@ class BasicCRUD(CRUDMethod):
             # Item
             if record_id:
                 try:
-                    item = self.sqlform(request = request,
-                                        resource = resource,
-                                        record_id = record_id,
-                                        readonly = True,
-                                        subheadings = subheadings,
-                                        format = representation,
-                                        )
+                    item = self.form(request = request,
+                                     resource = resource,
+                                     record_id = record_id,
+                                     readonly = True,
+                                     subheadings = subheadings,
+                                     format = representation,
+                                     )
                 except HTTP as e:
                     message = current.ERROR.BAD_RECORD \
                               if e.status == 404 else e.message
@@ -752,11 +755,12 @@ class BasicCRUD(CRUDMethod):
                         value = None
                     if value is None or value == "" or value == []:
                         field.readable = False
-                item = self.sqlform(request = request,
-                                    resource = resource,
-                                    record_id = record_id,
-                                    readonly = True,
-                                    format = representation)
+                item = self.form(request = request,
+                                 resource = resource,
+                                 record_id = record_id,
+                                 readonly = True,
+                                 format = representation,
+                                 )
 
                 # Link to Open record
                 popup_edit_url = get_config("popup_edit_url", None)
@@ -962,15 +966,16 @@ class BasicCRUD(CRUDMethod):
 
             # Get the form
             try:
-                form = self.sqlform(request = self.request,
-                                    resource = resource,
-                                    record_id = record_id,
-                                    onvalidation = onvalidation,
-                                    onaccept = onaccept,
-                                    message = message,
-                                    link = link,
-                                    subheadings = subheadings,
-                                    format = representation)
+                form = self.form(request = self.request,
+                                 resource = resource,
+                                 record_id = record_id,
+                                 onvalidation = onvalidation,
+                                 onaccept = onaccept,
+                                 message = message,
+                                 link = link,
+                                 subheadings = subheadings,
+                                 format = representation,
+                                 )
             except HTTP as e:
                 message = current.ERROR.BAD_RECORD \
                           if e.status == 404 else e.message
@@ -1104,6 +1109,7 @@ class BasicCRUD(CRUDMethod):
                 message = get_crud_string(self.tablename,
                                           "msg_record_deleted")
             else:
+                message = None
                 r.error(404, self.resource.error, next=r.url(method=""))
             current.response.confirmation = message
             r.http = "DELETE" # must be set for immediate redirect
@@ -1199,11 +1205,19 @@ class BasicCRUD(CRUDMethod):
             else:
                 default_filters = None
 
-            get_vars = r.get_vars
-            attr = dict(attr)
+            # Determine default list type
+            if representation == "aadata":
+                list_type = "datatable"
+            elif representation == "dl":
+                list_type = "datalist"
+            else:
+                list_type = attr.get("list_type")
+            if list_type is None:
+                list_type = get_config("list_type", "datatable")
 
-            # Data
-            list_type = attr.get("list_type", "datatable")
+            get_vars = r.get_vars
+
+            # Render the table/list
             if list_type == "datalist":
                 filter_ajax = True
                 target = "datalist"
@@ -1219,11 +1233,13 @@ class BasicCRUD(CRUDMethod):
                     if default_filters:
                         ajax_vars.update(default_filters)
                     dtargs["dt_ajax_url"] = r.url(representation="aadata", vars=ajax_vars)
+                    attr = dict(attr)
                     attr["dtargs"] = dtargs
                 filter_ajax = True
                 target = "datatable"
                 output = self._datatable(r, **attr)
 
+            # Done here if Ajax
             if representation in ("aadata", "dl"):
                 return output
 
@@ -1349,12 +1365,12 @@ class BasicCRUD(CRUDMethod):
                        self._permitted(method="update"):
                         items = self.update(r, **attr).get("form", None)
                     else:
-                        items = self.sqlform(request = self.request,
-                                             resource = self.resource,
-                                             record_id = r.id,
-                                             readonly = True,
-                                             format = representation,
-                                             )
+                        items = self.form(request = self.request,
+                                          resource = self.resource,
+                                          record_id = r.id,
+                                          readonly = True,
+                                          format = representation,
+                                          )
                 else:
                     raise HTTP(404, body="Record not Found")
             else:
@@ -1829,6 +1845,7 @@ class BasicCRUD(CRUDMethod):
                                ajaxurl = ajax_url)
             data = dl
         else:
+            data = None
             r.error(415, current.ERROR.BAD_FORMAT)
 
 
@@ -2068,28 +2085,25 @@ class BasicCRUD(CRUDMethod):
 
             _next = r.url(id="[id]", method="review")
 
+            reviewing = False
             if self._permitted("approve"):
-
                 approve = FORM(INPUT(_value = T("Approve"),
                                      _type = "submit",
                                      _name = "approve-btn",
                                      _id = "approve-btn",
                                      _class = "action-btn",
                                      ))
-
                 reject = FORM(INPUT(_value = T("Reject"),
                                     _type = "submit",
                                     _name = "reject-btn",
                                     _id = "reject-btn",
                                     _class = "action-btn",
                                     ))
-
                 edit = A(T("Edit"),
                          _href = r.url(id = r.id, method = "update",
                                        vars = {"_next": r.url(id=r.id, method="review")}),
                          _class = "action-btn",
                          )
-
                 cancel = A(T("Cancel"),
                            _href = r.url(id=0),
                            _class = "action-lnk",
@@ -2104,11 +2118,11 @@ class BasicCRUD(CRUDMethod):
                                              _id = "approve_form",
                                              )
 
-                reviewing = False
                 if approve.accepts(r.post_vars, session, formname="approve"):
                     resource = current.s3db.resource(r.tablename, r.id,
-                                                     approved=False,
-                                                     unapproved=True)
+                                                     approved = False,
+                                                     unapproved = True,
+                                                     )
                     try:
                         success = resource.approve()
                     except:
@@ -2760,9 +2774,7 @@ class BasicCRUD(CRUDMethod):
             target = {}
 
         if editable is None:
-            # Fall back to settings if caller didn't override
-            editable = False if settings.get_ui_open_read_first() else \
-                       "auto" if settings.get_ui_auto_open_update() else True
+            editable = cls._default_editable(table)
 
         # Open-action (Update or Read)
         authorised = editable and has_permission("update", table)
@@ -2785,7 +2797,10 @@ class BasicCRUD(CRUDMethod):
         else:
             # User has permission to edit only some - or none - of the records
             if not read_url:
-                method = [] if authorised else ["read"]
+                if authorised and editable == "auto":
+                    method = []
+                else:
+                    method = ["read"]
                 read_url = iframe_safe(URL(args = args + method, #.popup to use modals
                                            vars = get_vars,
                                            ))
@@ -2844,6 +2859,50 @@ class BasicCRUD(CRUDMethod):
         # Append custom actions
         if custom_actions:
             s3.actions = s3.actions + custom_actions
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def _default_editable(table):
+        """
+            Determines what method to use to open a record
+
+            Args:
+                table: the table (or table name)
+
+            Returns:
+                True - require explicit method for update, link open-action
+                       in datatables to update if permitted for all records
+                       in the table, otherwise read
+                False - require explicit method for update, link open-action
+                        in datatables to read regardless of permissions
+                "auto" - use implicit (=no) method, i.e. let BasicCRUD decide
+                         per-record what to do based on permissions
+        """
+
+        tablename = table if isinstance(table, str) else original_tablename(table)
+
+        get_config = current.s3db.get_config
+        settings = current.deployment_settings
+
+        open_read_first = get_config(tablename, "open_read_first")
+        if open_read_first is None:
+            open_read_first = settings.get_ui_open_read_first()
+        if open_read_first:
+            # Always read, irrespective permissions
+            editable = False
+        else:
+            editable = get_config(tablename, "editable", True)
+            if editable and current.auth.permission.ownership_required("update", table):
+                # User can edit only some (or no) records in the table
+                auto_open_update = get_config(tablename, "auto_open_update")
+                if auto_open_update is None:
+                    auto_open_update = settings.get_ui_auto_open_update()
+                editable = "auto" if auto_open_update else False
+            #else:
+            #    # User can edit any record in the table, apply table-setting as-is
+            #    pass
+
+        return editable
 
     # -------------------------------------------------------------------------
     def _default_cancel_button(self, r):
@@ -2999,7 +3058,7 @@ class BasicCRUD(CRUDMethod):
 
             # Extract data for embedded form from post_vars
             post_vars = request.post_vars
-            form_vars = Storage(table._filter_fields(post_vars))
+            form_vars = Storage(filter_fields(table, post_vars))
 
             # Pass values through validator to convert them into db-format
             for k in form_vars:
@@ -3258,6 +3317,7 @@ class BasicCRUD(CRUDMethod):
         elif numrows == 1:
             message = get_crud_string(dresource.tablename, "msg_record_deleted")
         else:
+            message = None
             r.error(404, dresource.error)
 
         # Return a JSON message

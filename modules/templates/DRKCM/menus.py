@@ -8,7 +8,7 @@ from gluon import current, URL
 from core import IS_ISO639_2_LANGUAGE_CODE
 from core.ui.layouts import MM, M, ML, MP, MA, SEP
 try:
-    from ..DRK.layouts import OM
+    from .layouts import OM
 except ImportError:
     pass
 import core.ui.menus as default
@@ -116,7 +116,7 @@ class MainMenu(default.MainMenu):
 
         if not auth.is_logged_in():
             request = current.request
-            login_next = URL(args=request.args, vars=request.vars)
+            login_next = URL(args=request.args, vars=request.get_vars)
             if request.controller == "default" and \
                request.function == "user" and \
                "_next" in request.get_vars:

@@ -580,6 +580,34 @@ def get_response_theme_sectors():
     return {s.id: T(s.name) for s in sectors}
 
 # =============================================================================
+def restrict_data_formats(r, privileged=False):
+    """
+        Restrict data exports
+
+        Args:
+            r: the CRUDRequest
+    """
+
+    settings = current.deployment_settings
+
+    allowed = {"html", "iframe", "popup", "aadata", "dl", "plain", "geojson"}
+    settings.ui.export_formats = None
+
+    if privileged:
+        allowed.update(("pdf", "xlsx", "json"))
+        settings.ui.export_formats = ("pdf", "xlsx")
+
+    if r.record:
+        allowed.update(("card", "pdf"))
+    if r.method == "options":
+        allowed.add("s3json")
+    elif r.method not in (None, "create", "read", "update", "delete"):
+        allowed.add("json")
+
+    if r.representation not in allowed:
+        r.unauthorised()
+
+# =============================================================================
 def inject_button(output, button, before="add_btn", alt="showadd_btn"):
     """
         Injects an additional action button into a CRUD view
@@ -894,6 +922,9 @@ def client_name_age(record):
     else:
         unit = T("years") if age != 1 else T("year")
 
+    if record.deceased:
+        unit = "%s (%s)" % (unit, T("deceased"))
+
     icons = {2: "fa fa-venus",
              3: "fa fa-mars",
              4: "fa fa-transgender-alt",
@@ -988,7 +1019,7 @@ class AbsenceFilter(RangeFilter):
             # if user has not set any of the limits, we get [] in values.
             value = values.get(variable, None)
             if value not in [None, []]:
-                if type(value) is list:
+                if isinstance(value, list):
                     value = value[0]
                 try:
                     value = int(value)

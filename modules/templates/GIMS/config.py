@@ -12,7 +12,7 @@ from gluon.storage import Storage
 from templates.RLPPTM.rlpgeonames import rlp_GeoNames
 
 # Default/lead organisation
-MFFKI = "Ministerium für Familie, Frauen, Kultur und Integration"
+MDI = "Ministerium des Innern, für Integration und Verkehr"
 
 # Org Groups
 DISTRICTS = "Kreisverwaltung"
@@ -157,7 +157,6 @@ def config(settings):
 
     settings.ui.calendar_clear_icon = True
 
-    settings.ui.auto_open_update = True
     #settings.ui.inline_cancel_edit = "submit"
 
     # Business hours to indicate in organizer (Mo-Fr 08-18)
@@ -277,7 +276,7 @@ def config(settings):
     # -------------------------------------------------------------------------
     # ORG Settings
     #
-    settings.org.default_organisation = MFFKI
+    settings.org.default_organisation = MDI
 
     settings.org.sector = True
     settings.org.sector_rheader = False

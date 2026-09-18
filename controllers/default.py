@@ -659,7 +659,7 @@ def person():
                            "user_profile",
                            ],
                    )
-        onaccept = lambda form: auth.s3_approve_user(form.vars),
+        onaccept = lambda form: auth.s3_approve_user(form.vars)
         auth.configure_user_fields()
         form = auth.profile(next = next,
                             onaccept = onaccept)
@@ -752,7 +752,7 @@ def person():
                         crud_fields += ["user_options.osm_oauth_consumer_key",
                                         "user_options.osm_oauth_consumer_secret",
                                         ]
-                    crud_form = s3base.S3SQLCustomForm(*crud_fields)
+                    crud_form = s3base.CustomForm(*crud_fields)
                     list_fields = ["name",
                                    "pe_default",
                                    ]
@@ -1014,15 +1014,6 @@ def user():
     utable = auth_settings.table_user
 
     arg = request.args(0)
-    if arg == "verify_email":
-        # Ensure we use the user's language
-        key = request.args[-1]
-        query = (utable.registration_key == key)
-        user = db(query).select(utable.language,
-                                limitby=(0, 1)).first()
-        if not user:
-            redirect(auth_settings.verify_email_next)
-        session.s3.language = user.language
 
     auth_settings.on_failed_authorization = URL(f="error")
 
@@ -1115,8 +1106,12 @@ def user():
         # Used when adding organisations from registration form
         return crud_controller(prefix="auth", resourcename="user")
 
+    elif arg == "verify_email":
+        title = response.title = T("Confirm Registration")
+        form = auth.verify_email()
+
     else:
-        # logout or verify_email
+        # logout or other function
         title = ""
         form = auth()
 
@@ -1181,21 +1176,6 @@ def view():
 # =============================================================================
 # Login Methods
 # =============================================================================
-def facebook():
-    """ Login using Facebook """
-
-    channel = s3db.msg_facebook_login()
-
-    if not channel:
-        redirect(URL(f="user", args=request.args, vars=get_vars))
-
-    from core.aaa.oauth import FaceBookAccount
-    auth.settings.login_form = FaceBookAccount(channel)
-    form = auth()
-
-    return {"form": form}
-
-# -----------------------------------------------------------------------------
 def google():
     """ Login using Google """
 

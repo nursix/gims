@@ -1828,7 +1828,7 @@ class S3EmbeddedComponentWidget(EdenFormWidget):
         formrows = TAG[""](formrows)
 
         # Divider
-        divider = widgetstyle("", "", DIV(_class="subheading"), "")
+        divider = widgetstyle("", "", "", "")
         divider.add_class("box_bottom embedded")
 
         # Widget script
@@ -2596,7 +2596,7 @@ class ImageUploadWidget(EdenFormWidget):
         """
 
         # If there is an uploaded file, accept it as-is
-        if value not in (b"", None):
+        if value not in ("", b"", None):
             return value, None
 
         # Check for cropped image
@@ -4425,7 +4425,7 @@ class S3TagCheckboxWidget(EdenFormWidget):
               e.g. IS_IN_SET(("Y", "N")) (also for consistency with imports)
             - when using this with a filtered key-value component (e.g.
               pr_person_tag), make the filtered component multiple=False and
-              embed *.value as subtable-field (do not use S3SQLInlineComponent)
+              embed *.value as subtable-field (do not use InlineComponent)
     """
 
     def __init__(self, on="Y", off="N"):

@@ -30,7 +30,7 @@ __all__ = ("DataTable",
 
 import re
 
-from gluon import current, URL, \
+from gluon import current, URL, xmlescape, \
                   A, BUTTON, DIV, FORM, INPUT, LABEL, SPAN, \
                   TABLE, TBODY, TD, TH, THEAD, TR
 
@@ -505,6 +505,7 @@ class DataTable:
             script_opts = s3.datatable_opts = {}
 
         attr_get = attr.get
+        base_url = attr_get("dt_base_url")
 
         # Build the form
         form = FORM(_class="dt-wrapper")
@@ -528,7 +529,7 @@ class DataTable:
             elements.append(SPAN(" | ", _class="separator"))
 
         if not s3.no_formats:
-            exports = cls.exports(base_url = attr_get("dt_base_url"),
+            exports = cls.exports(base_url = base_url,
                                   rfields = rfields,
                                   )
             if len(exports):
@@ -568,7 +569,7 @@ class DataTable:
         available_cols = attr.get("dt_available_cols")
         if available_cols:
             script_opts["variable_columns"] = True
-            form.append(cls.column_selector(available_cols))
+            form.append(cls.column_selector(available_cols, base_url=base_url))
 
         # InitComplete callback (processed in views/dataTables.html)
         callback = settings.get_ui_datatables_initComplete()
@@ -616,7 +617,7 @@ class DataTable:
                 if colname == "BULK":
                     append(str(bulk_checkbox(row[dbid])))
                 else:
-                    append(s3_str(row[colname]))
+                    append(s3_str(xmlescape(row[colname])))
             addrow(details)
 
         output = {"recordsTotal": totalrows,
@@ -668,18 +669,24 @@ class DataTable:
 
     # -------------------------------------------------------------------------
     @staticmethod
-    def column_selector(available_cols):
+    def column_selector(available_cols, base_url=None):
         """
             Produces a column selector for variable columns
 
             Args:
                 available_columns: the available columns, a list of tuples
                                    (index, label, selector, active)
+                base_url: the base URL of the data table
             Returns:
                 columns selector subform
         """
 
         T = current.T
+
+        if not base_url:
+            base_url = current.request.url
+        # TODO sanitize URL => drop extensions from path, remove query part
+        lookup_url = base_url.split("?")[0].rstrip("/") + "/columns.json"
 
         # The column options
         options = TBODY(_class="column-options")
@@ -699,13 +706,14 @@ class DataTable:
                         _class = "available-column",
                         )
 
-            row = (TR(TD(col),
+            row = (TR(TD(col, _colspan=2),
                       TD(ICON("fa fa-caret-up"), _class = "column-left"),
                       TD(ICON("fa fa-caret-down"), _class = "column-right"),
                       ))
             options.append(row)
 
         # Select/Deselect All option
+        from gluon import SELECT, OPTION
         select_all = THEAD(TR(TD(LABEL(INPUT(_type="checkbox",
                                              _class = "column-select-all",
                                              value = all_selected,
@@ -713,8 +721,38 @@ class DataTable:
                                        T("All"),
                                        _class = "available-column",
                                        ),
-                                  _colspan = 3,
-                                  )))
+                                  ),
+                                # ColumnConfigManager
+                                TD(DIV(_class="throbber cfg-select-throbber"),
+                                   SELECT(OPTION(T("No Saved Configurations"),
+                                                 _disabled = "disabled",
+                                                 _selected = "selected",
+                                                 _value = "",
+                                                 _class = "cfg-select-empty",
+                                                 ),
+                                          _class = "cfg-select cfg-select-options",
+                                          ),
+                                   INPUT(_class="cfg-save cfg-save-name hide"),
+                                   ),
+                                TD(ICON("fa fa-floppy-o",
+                                        _title=T("Save"),
+                                        _class="cfg-select cfg-select-save",
+                                        ),
+                                   ICON("fa fa-check-square",
+                                        _title=T("Save"),
+                                        _class="cfg-save cfg-save-submit hide",
+                                        ),
+                                   ),
+                                TD(ICON("fa fa-trash-o",
+                                        _title=T("Delete"),
+                                        _class="cfg-select cfg-select-delete",
+                                        ),
+                                   ICON("fa fa-close",
+                                        _title=T("Cancel"),
+                                        _class="cfg-save cfg-save-cancel hide",
+                                        ),
+                                   ),
+                                ))
 
         # Complete subform
         subform = DIV(TABLE(select_all, options),
@@ -731,6 +769,7 @@ class DataTable:
                             _href = "javascript:void(0)",
                             ),
                           ),
+                      data = {"url": lookup_url},
                       _class="column-selector columns hide",
                       )
 
@@ -924,6 +963,7 @@ class DataTable:
                    "selectedRecords": T("Selected Records"),
                    "executeBulkAction": T("OK"),
                    "selectColumns": T("Select Columns"),
+                   "savedConfigurations": T("Saved Configurations..."),
                    }
 
         return "\n".join('''i18n.%s="%s"'''% (k, v) for k, v in strings.items())

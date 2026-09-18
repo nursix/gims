@@ -73,13 +73,14 @@ class DocumentEntityModel(DataModel):
                         "fin_expense": T("Expense"),
                         "fire_station": T("Fire Station"),
                         "hms_hospital": T("Hospital"),
-                        "hrm_human_resource": T("Human Resource"),
+                        "hrm_human_resource": T("Staff Record"),
                         "hrm_training_event_report": T("Training Event Report"),
                         "inv_adj": T("Stock Adjustment"),
                         "inv_recv": T("Incoming Shipment"),
                         "inv_send": T("Sent Shipment"),
                         "inv_warehouse": T("Warehouse"),
-                        "pr_group": T("Team"),
+                        "med_patient": T("Patient"),
+                        "pr_group": T("Group"),
                         "project_project": T("Project"),
                         "project_activity": T("Project Activity"),
                         "project_task": T("Task"),
@@ -128,6 +129,8 @@ class DocumentModel(DataModel):
         define_table = self.define_table
         super_link = self.super_link
 
+        permitted_extensions = current.deployment_settings.get_doc_permitted_extensions()
+
         # ---------------------------------------------------------------------
         # Default document status
         #
@@ -152,6 +155,9 @@ class DocumentModel(DataModel):
                            autodelete = True,
                            length = current.MAX_FILENAME_LENGTH,
                            represent = self.doc_file_represent,
+                           requires = IS_FILE(extension = permitted_extensions,
+                                              error_message = T("Inadmissible File Type"),
+                                              ),
                            # upload folder needs to be visible to the
                            # download() function as well as the upload
                            uploadfolder = os.path.join(folder, "uploads"),
@@ -451,13 +457,16 @@ class DocumentModel(DataModel):
             return
 
         if not document:
-            encoded_file = form_vars.get("imagecrop-data", None)
+            encoded_file = form_vars.get("imagecrop-data")
             if encoded_file:
                 # S3ImageCropWidget
                 import base64
-                metadata, encoded_file = encoded_file.split(",")
-                #filename, datatype, enctype = metadata.split(";")
-                filename = metadata.split(";", 1)[0]
+                try:
+                    metadata, encoded_file = encoded_file.split(",")
+                    filename = metadata.split(";", 1)[0]
+                except ValueError:
+                    form.errors.file = current.T("Invalid image data")
+                    return
                 f = Storage()
                 f.filename = uuid4().hex + filename
                 f.file = BytesIO(base64.b64decode(encoded_file))
@@ -557,8 +566,10 @@ class DocumentTagModel(DataModel):
                                                  ),
                        )
 
+        # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
-        return None
+        #
+        #return {}
 
 # =============================================================================
 def doc_rheader(r, tabs=None):

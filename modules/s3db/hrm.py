@@ -122,7 +122,7 @@ class HRModel(DataModel):
 
         root_org = auth.root_org()
         if is_admin:
-            filter_opts = ()
+            filter_opts = None
         elif root_org:
             filter_opts = (root_org, None)
         else:
@@ -832,12 +832,12 @@ class HRModel(DataModel):
                 crud_fields.insert(posn, "department_id")
             vol_experience = settings.get_hrm_vol_experience()
             if vol_experience in ("programme", "both"):
-                crud_fields.insert(posn, S3SQLInlineComponent("programme_hours",
-                                                              label = "",
-                                                              fields = ["programme_id"],
-                                                              link = False,
-                                                              multiple = False,
-                                                              ))
+                crud_fields.insert(posn, InlineComponent("programme_hours",
+                                                         label = "",
+                                                         fields = ["programme_id"],
+                                                         link = False,
+                                                         multiple = False,
+                                                         ))
             elif vol_experience == "activity":
                 report_fields.append("person_id$activity_hours.activity_hours_activity_type.activity_type_id")
             crud_fields.append("details.volunteer_type")
@@ -868,12 +868,12 @@ class HRModel(DataModel):
                 report_fields.append("department_id")
             vol_experience = settings.get_hrm_vol_experience()
             if vol_experience in ("programme", "both"):
-                crud_fields.insert(2, S3SQLInlineComponent("programme_hours",
-                                                           label = "",
-                                                           fields = ["programme_id"],
-                                                           link = False,
-                                                           multiple = False,
-                                                           ))
+                crud_fields.insert(2, InlineComponent("programme_hours",
+                                                      label = "",
+                                                      fields = ["programme_id"],
+                                                      link = False,
+                                                      multiple = False,
+                                                      ))
             elif vol_experience == "activity":
                 report_fields.append("person_id$activity_hours.activity_hours_activity_type.activity_type_id")
             crud_fields.append("details.volunteer_type")
@@ -922,7 +922,7 @@ class HRModel(DataModel):
 
         # Custom Form
         s3.hrm = Storage(crud_fields = crud_fields) # Store fields for easy ability to modify later
-        crud_form = S3SQLCustomForm(*crud_fields)
+        crud_form = CustomForm(*crud_fields)
 
         if settings.get_hrm_org_required():
             mark_required = ("organisation_id",)
@@ -2096,7 +2096,7 @@ class HRSkillModel(DataModel):
 
         root_org = auth.root_org()
         if is_admin:
-            filter_opts = ()
+            filter_opts = None
         elif root_org:
             filter_opts = (root_org, None)
         else:
@@ -2123,6 +2123,10 @@ class HRSkillModel(DataModel):
                            label = T("Name"),
                            requires = [IS_NOT_EMPTY(),
                                        IS_LENGTH(64),
+                                       IS_NOT_ONE_OF(db,
+                                                     "%s.name" % tablename,
+                                                     error_message = T("Record already exists"),
+                                                     ),
                                        ],
                            ),
                      CommentsField(),
@@ -2184,6 +2188,10 @@ class HRSkillModel(DataModel):
                            label = T("Name"),
                            requires = [IS_NOT_EMPTY(),
                                        IS_LENGTH(64),
+                                       IS_NOT_ONE_OF(db,
+                                                     "%s.name" % tablename,
+                                                     error_message = T("Record already exists"),
+                                                     ),
                                        ],
                            ),
                      CommentsField(),
@@ -4300,18 +4308,18 @@ class HRAppraisalModel(DataModel):
             msg_no_match = T("No Appraisals found"),
             msg_list_empty = T("Currently no Appraisals entered"))
 
-        crud_form = S3SQLCustomForm("organisation_id",
-                                    "job_title_id",
-                                    "date",
-                                    "rating",
-                                    "supervisor_id",
-                                    S3SQLInlineComponent("document",
-                                                         label = T("Files"),
-                                                         link = False,
-                                                         fields = ["file"],
-                                                         ),
-                                    "comments",
-                                    )
+        crud_form = CustomForm("organisation_id",
+                               "job_title_id",
+                               "date",
+                               "rating",
+                               "supervisor_id",
+                               InlineComponent("document",
+                                               label = T("Files"),
+                                               link = False,
+                                               fields = ["file"],
+                                               ),
+                               "comments",
+                               )
 
         configure(tablename,
                   context = {"person": "person_id",
@@ -4848,7 +4856,7 @@ class HRProgrammeModel(DataModel):
 
         label_create = crud_strings[tablename].label_create
         if is_admin:
-            filter_opts = ()
+            filter_opts = None
         elif root_org:
             filter_opts = (root_org, None)
         else:
@@ -5137,13 +5145,13 @@ class HRShiftModel(DataModel):
                                                         }
                             )
 
-        crud_form = S3SQLCustomForm("job_title_id",
-                                    "skill_id",
-                                    "start_date",
-                                    "end_date",
-                                    "comments",
-                                    (T("Assigned"), "human_resource_shift.human_resource_id"),
-                                    )
+        crud_form = CustomForm("job_title_id",
+                               "skill_id",
+                               "start_date",
+                               "end_date",
+                               "comments",
+                               (T("Assigned"), "human_resource_shift.human_resource_id"),
+                               )
 
         list_fields = ["job_title_id",
                        "skill_id",
@@ -7883,22 +7891,20 @@ def hrm_group_controller():
                           args=["[id]", "group_membership"])
         teams_orgs = settings.get_hrm_teams_orgs()
         if teams_orgs:
-            if teams_orgs == 1:
-                multiple = False
-            else:
-                multiple = True
+            multiple = teams_orgs != 1
+
             ottable = s3db.org_organisation_team
             label = ottable.organisation_id.label
-            ottable.organisation_id.label = ""
-            crud_form = S3SQLCustomForm("name",
-                                        "description",
-                                        S3SQLInlineComponent("organisation_team",
-                                                             label = label,
-                                                             fields = ["organisation_id"],
-                                                             multiple = multiple,
-                                                             ),
-                                        "comments",
-                                        )
+
+            crud_form = CustomForm("name",
+                                   "description",
+                                   InlineComponent("organisation_team",
+                                                   label = label,
+                                                   fields = [("", "organisation_id")],
+                                                   multiple = multiple,
+                                                   ),
+                                   "comments",
+                                   )
 
             filter_widgets = [
                 TextFilter(["name",
@@ -7917,7 +7923,7 @@ def hrm_group_controller():
                               ),
                 ]
 
-            list_fields = ["organisation_team.organisation_id",
+            list_fields = [(T("Organization"), "organisation_team.organisation_id"),
                            "name",
                            "description",
                            "comments",
@@ -9506,7 +9512,7 @@ class hrm_Medical(CRUDMethod):
             * Insurance
 
         Note:
-            It is expected to create S3SQLCustomForm for these in
+            It is expected to create CustomForm for these in
             - customise_hrm_insurance_resource
             - customise_pr_physical_description_resource
     """
@@ -9552,22 +9558,22 @@ class hrm_Medical(CRUDMethod):
              #"filter": FS("pe_id") == r.record.pe_id,
              "tablename": "pr_person",
              "context": ("id", "id"),
-             "sqlform": S3SQLCustomForm("physical_description.blood_type",
-                                        "physical_description.medical_conditions",
-                                        "physical_description.medication",
-                                        "physical_description.diseases",
-                                        "physical_description.allergic",
-                                        "physical_description.allergies",
-                                        ),
+             "crud_form": CustomForm("physical_description.blood_type",
+                                     "physical_description.medical_conditions",
+                                     "physical_description.medication",
+                                     "physical_description.diseases",
+                                     "physical_description.allergic",
+                                     "physical_description.allergies",
+                                     ),
              },
             {"label": T("Medical Coverage"),
              "type": "form",
              "tablename": "hrm_human_resource",
              "context": "person",
-             "sqlform": S3SQLCustomForm("insurance.insurance_number",
-                                        "insurance.phone",
-                                        "insurance.insurer",
-                                        ),
+             "crud_form": CustomForm("insurance.insurance_number",
+                                     "insurance.phone",
+                                     "insurance.insurer",
+                                     ),
              },
             ]
 

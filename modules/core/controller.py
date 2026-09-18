@@ -334,7 +334,8 @@ class CRUDRequest:
         search_mode = self.get_vars.pop("$search", None)
         if search_mode:
             # Apply filter expressions from POST data or session?
-            if self.http == "POST" or search_mode == "session":
+            if self.http == "POST" and search_mode != "session" or \
+               self.http == "GET" and search_mode == "session":
                 self.__search(search_mode)
             # Suppress default filters in this case
             self.suppress_default_filters = True
@@ -364,9 +365,8 @@ class CRUDRequest:
         get_vars = self.get_vars
         content_type = self.env.get("content_type") or ""
 
-        action = get_vars.pop("$action", None)
-
         # Override request method (unless marked as submit-action)
+        action = get_vars.pop("$action", None)
         if mode and action != "submit":
             self.http = "GET"
 
@@ -1017,6 +1017,21 @@ class CRUDRequest:
                bool(current.response.s3.form_error)
 
     # -------------------------------------------------------------------------
+    def is_delete(self):
+        """
+            Checks whether this request is a deletion request
+
+            Returns:
+                boolean
+        """
+
+        http = self.http
+
+        return self.method == "delete" or \
+               http == "DELETE" or \
+               http in ("POST", "DELETE") and self.representation == "dl" and "delete" in self.get_vars
+
+    # -------------------------------------------------------------------------
     def stylesheet(self, method=None, skip_error=False):
         """
             Find the XSLT stylesheet for this request
@@ -1338,28 +1353,14 @@ def crud_controller(prefix=None, resourcename=None, **attr):
             # Get table config
             get_config = s3db.get_config
             listadd = get_config(tablename, "listadd", True)
-
-            # Which is the standard open-action?
-            if settings.get_ui_open_read_first():
-                # Always read, irrespective permissions
-                editable = False
-            else:
-                editable = get_config(tablename, "editable", True)
-                if editable and \
-                   auth.permission.ownership_required("update", table):
-                    # User cannot edit all records in the table
-                    if settings.get_ui_auto_open_update():
-                        # Decide automatically per-record (implicit method)
-                        editable = "auto"
-                    else:
-                        # Always open read first (explicit read)
-                        editable = False
-
             deletable = get_config(tablename, "deletable", True)
             copyable = get_config(tablename, "copyable", False)
 
-            # URL to open the resource
+            # Which is the standard open-action?
             from .methods import BasicCRUD
+            editable = BasicCRUD._default_editable(table)
+
+            # URL to open the resource
             open_url = BasicCRUD._linkto(r,
                                          authorised = authorised,
                                          update = editable,

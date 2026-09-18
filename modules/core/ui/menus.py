@@ -169,11 +169,9 @@ class MainMenu:
 
         if not auth.is_logged_in():
             request = current.request
-            login_next = URL(args=request.args, vars=request.vars)
-            if request.controller == "default" and \
-               request.function == "user" and \
-               "_next" in request.get_vars:
-                login_next = request.get_vars["_next"]
+            login_next = URL(args=request.args, vars=request.get_vars)
+            if request.controller == "default" and request.function == "user":
+                login_next = auth.get_vars_next() or login_next
 
             self_registration = settings.get_security_self_registration()
             menu_personal = MP()(
@@ -236,12 +234,6 @@ class MainMenu:
         settings = current.deployment_settings
 
         return MOA(c="default")(
-                MOA("Login with Facebook", f="facebook",
-                    args=["login"],
-                    api = "facebook",
-                    check = lambda item: current.s3db.msg_facebook_login(),
-                    title = T("Login using Facebook account"),
-                    ),
                 MOA("Login with Google", f="google",
                     args=["login"],
                     api = "google",
@@ -300,14 +292,12 @@ class OptionsMenu:
         # NB: Do not specify a controller for the main menu to allow
         #     re-use of this menu by other controllers
         return M()(
-                    M("User Management", c="admin", f="user")(
-                        M("Create User", m="create"),
-                        M("List All Users"),
-                        M("Import Users", m="import"),
-                        M("List All Roles", f="role"),
-                        M("List All Organization Approvers & Whitelists", f="organisation"),
-                        #M("Roles", f="group"),
-                        #M("Membership", f="membership"),
+                    M("Users and Roles", c="admin", link=False)(
+                        M("Manage Users", f="user"),
+                        M("Manage Roles", f="role"),
+                        # M("List All Organization Approvers & Whitelists", f="organisation"),
+                        # M("Roles", f="group"),
+                        # M("Membership", f="membership"),
                     ),
                     M("CMS", c="cms", f="post")(
                     ),
@@ -322,7 +312,7 @@ class OptionsMenu:
                     M("Event Log", c="admin", f="event"),
                     M("Error Tickets", c="admin", f="errors"),
                     M("Scheduler", c="admin", f="task"),
-                    M("Settings", c="admin", f="setting"),
+                    # M("Settings", c="admin", f="setting"),
                     M("Synchronization", c="sync", f="index")(
                         M("Settings", f="config", args=[1], m="update"),
                         M("Repositories", f="repository"),
@@ -1148,15 +1138,16 @@ class OptionsMenu:
         ADMIN = current.session.s3.system_roles.ADMIN
 
         return M(c="med")(
-                    M("Patients", f="patient")(
+                    M("Current Visits", f="patient")(
                         M("Create", m="create"),
+                        M("Concluded Visits", f="patient", vars={"closed": "only"}),
                         ),
                     # M("Persons", f="person"),
                     M("Units", f="unit")(
                         M("Create", m="create"),
                         ),
                     M("Administration", link=False, restrict=[ADMIN])(
-                        M("Medicines", f="substance"),
+                        M("Active Substances", f="substance"),
                         M("Vaccination Types", f="vaccination_type"),
                         ),
                     )
@@ -1202,29 +1193,19 @@ class OptionsMenu:
                     M("Compose", f="compose"),
                     M("InBox", f="inbox")(
                         M("Email", f="email_inbox"),
-                        #M("Facebook", f="facebook_inbox"),
                         M("RSS", f="rss"),
                         M("SMS", f="sms_inbox"),
-                        M("Twitter", f="twitter_inbox"),
                     ),
                     M("Outbox", f="outbox")(
                         M("Email", f="email_outbox"),
-                        M("Facebook", f="facebook_outbox"),
                         M("SMS", f="sms_outbox"),
-                        M("Twitter", f="twitter_outbox"),
                     ),
                     M("Message Log", f="message"),
                     M("Distribution groups", f="group")(
                         M("Group Memberships", f="group_membership"),
                     ),
-                    M("Twitter Search", f="twitter_result")(
-                       M("Search Queries", f="twitter_search"),
-                       M("Results", f="twitter_result"),
-                       # @ToDo KeyGraph Results
-                    ),
                     M("Administration", restrict=[ADMIN], link=False)(
                         M("Email Channels (Inbound)", c="msg", f="email_channel"),
-                        M("Facebook Channels", c="msg", f="facebook_channel"),
                         M("RSS Channels", c="msg", f="rss_channel"),
                         M("SMS Outbound Gateways", c="msg", f="sms_outbound_gateway"),
                         M("SMS Modem Channels", c="msg", f="sms_modem_channel"),
@@ -1232,7 +1213,6 @@ class OptionsMenu:
                         M("SMS WebAPI Channels", c="msg", f="sms_webapi_channel"),
                         M("Mobile Commons Channels", c="msg", f="mcommons_channel"),
                         M("Twilio Channels", c="msg", f="twilio_channel"),
-                        M("Twitter Channels", c="msg", f="twitter_channel"),
                         M("Parsers", c="msg", f="parser"),
                         ),
                     )
@@ -1599,8 +1579,8 @@ class OptionsMenu:
         return M(c="vehicle")(
                     M("Vehicles", f="vehicle")(
                         M("Create", m="create"),
-                        M("Import", m="import", p="create"),
-                        M("Map", m="map"),
+                        # M("Import", m="import", p="create"),
+                        # M("Map", m="map"),
                     ),
                     M("Vehicle Types", f="vehicle_type")(
                         M("Create", m="create"),
@@ -1613,6 +1593,10 @@ class OptionsMenu:
         """ Water: Floods, etc """
 
         return M(c="water")(
+                    M("Wells", f="well")(
+                        M("Create", m="create"),
+                        M("Map", m="map"),
+                    ),
                     M("Gauges", f="gauge")(
                         M("Create", m="create"),
                         M("Map", m="map"),
